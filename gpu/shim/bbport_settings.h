@@ -50,11 +50,11 @@ inline constexpr Effect Effects[] = {
     {"quit_to_desktop", "Quit to Desktop in the title and System menus", true},
 };
 inline constexpr int EffectCount = int(sizeof(Effects) / sizeof(Effects[0]));
-/// Output resolutions: the upscaler's output and the UI host targets. The 16:9 ones change
-/// live; the ultrawide ones need the startup patch (patches.py ultrawide_writes, run.py).
-inline constexpr int OutputWidths[] = {1280, 1920, 2560, 3840, 2560, 3440, 3840, 5120, 3840, 5120};
-inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160, 1080, 1440, 1600, 2160, 1080, 1440};
-inline constexpr int OutputCount = 10;
+/// Output resolutions and a final slot for a validated custom size from the launcher/ini.
+inline int OutputWidths[] = {1280,1920,2560,3840,2560,3440,3840,5120,3840,5120,1280,1080,1920};
+inline int OutputHeights[] = {720,1080,1440,2160,1080,1440,1600,2160,1080,1440,800,1920,1080};
+inline constexpr int OutputCount = sizeof(OutputWidths) / sizeof(OutputWidths[0]);
+inline constexpr int OutputCustom = OutputCount - 1;
 inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
 /// Wider than 16:9: camera and HUD patched at startup.
 inline bool Ultrawide(int output) {

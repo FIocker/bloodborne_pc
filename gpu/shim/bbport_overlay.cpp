@@ -297,15 +297,14 @@ void Menu() {
     ImGui::EndDisabled(); // upscaler off
 
     ImGui::SeparatorText("Output resolution");
-    static const char* outputs[] = {"1280 x 720", "1920 x 1080", "2560 x 1440", "3840 x 2160",
-                                    "2560 x 1080 (21:9)", "3440 x 1440 (21:9)",
-                                    "3840 x 1600 (21:9)", "5120 x 2160 (21:9)",
-                                    "3840 x 1080 (32:9)", "5120 x 1440 (32:9)"};
-    static_assert(sizeof(outputs) / sizeof(*outputs) == BbSettings::OutputCount);
+    auto output_label = [](int i) {
+        return std::to_string(BbSettings::OutputWidths[i]) + " x " +
+               std::to_string(BbSettings::OutputHeights[i]);
+    };
     int output = s.output_res;
-    if (ImGui::BeginCombo("Output resolution", outputs[output])) {
+    if (ImGui::BeginCombo("Output resolution", output_label(output).c_str())) {
         for (int i = 0; i < BbSettings::OutputCount; ++i) {
-            if (ImGui::Selectable(outputs[i], i == output)) {
+            if (ImGui::Selectable(output_label(i).c_str(), i == output)) {
                 Store(s.output_res, i, true);
             }
         }
