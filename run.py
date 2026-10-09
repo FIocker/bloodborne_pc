@@ -246,6 +246,9 @@ def main():
     mod_view = game if game.resolve() != original_game else None
     try:
         run_script('prepare.py', game, '--out', out)
+        sys.path.insert(0, str(PORT / 'scripts'))
+        from aspect_ratio import segment_fingerprint
+        env['BB_ASPECT_EBOOT_SEGMENTS'] = segment_fingerprint((out / 'eboot.elf').read_bytes())
         run_script('link_libc.py', game, '--out', out)
         run_script('link_modules.py', game, '--out', out)
         # Legacy CPU profile (scripts/cpu_compat.py): the image no longer needs BMI1, LZCNT or
@@ -293,14 +296,16 @@ def main():
                                         text=True, creationflags=no_console())
                 live = result.stdout.strip() if result.returncode == 0 else '0'
             live = '1' if live == '1' or not patched else '0'
-            # Ultrawide: the camera and HUD need the startup patch (patches.py hud_canvas).
-            from patches import OUTPUT_SIZE, hud_canvas
-            canvas = hud_canvas(tuple(int(v) for v in scaled_output.split('x')))
-            if patched and canvas != OUTPUT_SIZE:
+        if scaled_output or env.get('BB_OUTPUT_RES'):
+            movie_output = scaled_output or env['BB_OUTPUT_RES']
+            ow, oh = map(int, movie_output.split('x'))
+            if ow * 9 != oh * 16:
                 live = '0'
-                env['BB_UI_RES'] = f'{canvas[0]}x{canvas[1]}'
-                print(f'Output {scaled_output}: ultrawide, HUD {env["BB_UI_RES"]}')
-        if live == '1' or not scaled_output:
+                env['BB_UI_RES'] = movie_output
+                print('Aspect correction: centered 16:9 stage; aspect changes require restart')
+            else:
+                env.pop('BB_UI_RES', None)
+        else:
             env.pop('BB_UI_RES', None)
         if live == '1':
             print(f'Output {scaled_output}: live resolution changes (live_resolution=0: startup patch)')

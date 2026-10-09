@@ -296,10 +296,8 @@ bool TemporalUpscaler::OnFrameStart() {
     const bool active = Active();
     const bool jitter_on = active && settings.jitter && !BbToggle::Disabled(1u << 25);
     const int upscaler = settings.upscaler.load();
-    const int output = settings.output_res.load();
-    // Ultrawide outputs apply after a restart (startup patch), not live.
-    const bool output_changed = !scaled_session && applied_output != output &&
-                                !BbSettings::Ultrawide(output);
+    const int output = BbSettings::AspectNeedsRestart() ? settings.startup_output_res : settings.output_res.load();
+    const bool output_changed = !scaled_session && applied_output != output;
     if (output_changed) {
         target_width = BbSettings::OutputWidths[output];
         target_height = BbSettings::OutputHeights[output];
@@ -1524,7 +1522,7 @@ void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId
     // with a scene (G-buffer depth this frame) fills the whole width: upscaler off, or a menu
     // over the world.
     const bool scene = !camera_motion.Enabled() || camera_motion.Depth();
-    const float side = scene ? 0.0f : 0.5f * (1.0f - 1920.0f / float(UiComposition::Canvas()[0]));
+    const float side = scene ? 0.0f : 0.5f * (1.0f - 1920.0f / float(UiComposition::MovieViewport().first));
     const s32 src_side = s32(std::lround(source_width * side));
     const s32 dst_side = s32(std::lround(ui_width * side));
     if (dst_side > 0) {
