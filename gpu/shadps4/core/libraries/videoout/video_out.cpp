@@ -17,6 +17,7 @@
 #include "core/libraries/videoout/videoout_error.h"
 #include "core/platform.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
+#include "video_core/renderer_vulkan/vk_reflex.h"
 
 extern std::unique_ptr<Vulkan::Presenter> presenter;
 
@@ -186,6 +187,8 @@ s32 PS4_SYSV_ABI sceVideoOutSubmitFlip(s32 handle, s32 bufferIndex, s32 flipMode
         return ORBIS_VIDEO_OUT_ERROR_FLIP_QUEUE_FULL;
     }
 
+    // Only mark simulation end once the flip request is actually accepted
+    Vulkan::Reflex::OnSimulationEnd();
     return ORBIS_OK;
 }
 
@@ -353,6 +356,7 @@ s32 sceVideoOutSubmitEopFlip(s32 handle, u32 buf_id, u32 mode, s64 flip_arg, voi
         return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
     }
 
+    Vulkan::Reflex::OnSimulationEnd();
     Platform::IrqC::Instance()->RegisterOnce(
         Platform::InterruptId::GfxFlip, [=](Platform::InterruptId irq) {
             ASSERT_MSG(irq == Platform::InterruptId::GfxFlip, "An unexpected IRQ occured");

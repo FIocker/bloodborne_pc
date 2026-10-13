@@ -193,7 +193,8 @@ TWEAKS = [
                          'Пункт «Выйти на рабочий стол» в главном меню и в меню «Система»'), True),
 ]
 INI_FLAGS = {'sharpen', 'object_motion', 'show_fps', *(k for k, _t, _o in EFFECTS + EXTRAS + CHEATS + TWEAKS)}
-INI_DEFAULTS = {'upscaler': 'fsr4', 'preset': '1', 'sharpen': '1', 'sharpness': '0.50',
+INI_DEFAULTS = {'upscaler': 'fsr4', 'frame_generation': 'off', 'fg_backend': 'dlss', 'reflex': 'on',
+                'preset': '1', 'sharpen': '1', 'sharpness': '0.50',
                 'object_motion': '1', 'show_fps': '1', 'output_res': '1920x1080', 'model_lod': '0',
                 'live_resolution': 'auto', 'hud_position': '100',
                 **{key: '1' if on else '0' for key, _t, on in EFFECTS + EXTRAS + CHEATS + TWEAKS}}
@@ -210,6 +211,17 @@ APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / 'CUSA03173'
                 'supermedo_user': '', 'supermedo_password': '', 'thd_online_id': '', 'thd_token': ''}
 # bbbridge's own app reads and writes the online_* keys above: keep their names.
 
+FG_BACKENDS = [('dlss', ('DLSS Frame Generation', 'DLSS генерация кадров')),
+               ('fsr', ('FSR Frame Generation', 'FSR генерация кадров'))]
+FG_MODES_DLSS = [('off', ('Off', 'Выключено')),
+                 ('2x', ('2x (Double FPS)', '2x (Удвоение FPS)')),
+                 ('3x', ('3x (Triple FPS)', '3x (Утроение FPS)')),
+                 ('4x', ('4x (Quadruple FPS)', '4x (Четырёхкратный FPS)'))]
+FG_MODES_FSR = [('off', ('Off', 'Выключено')),
+                ('2x', ('2x (Double FPS)', '2x (Удвоение FPS)'))]
+REFLEX_MODES = [('off', ('Off', 'Выключено')),
+                ('on', ('On', 'Включено')),
+                ('boost', ('On + Boost', 'Включено + Boost'))]
 UPSCALERS = [('dlss', ('DLSS (NVIDIA GeForce RTX)',)),
              ('fsr4', ('FSR 4 (best quality)', 'FSR 4 (лучшее качество)')),
              ('fsr411', ('FSR 4.1.1 (needs fsr4_411 assets)', 'FSR 4.1.1 (нужны ассеты fsr4_411)')),
@@ -453,8 +465,16 @@ def server_check_hunters_dream():
     return '\n'.join(lines)
 
 
-def game_environment(s):
+def game_environment(s, ini=None):
     env = dict(os.environ)
+    if ini:
+        for ini_k, env_k in (('frame_generation', 'BB_FRAME_GENERATION'),
+                             ('fg_backend', 'BB_FG_BACKEND'),
+                             ('reflex', 'BB_REFLEX'),
+                             ('upscaler', 'BB_UPSCALER'),
+                             ('output_res', 'BB_OUTPUT_RES')):
+            if ini_k in ini and not env.get(env_k):
+                env[env_k] = str(ini[ini_k])
     env['BB_GAME_DIR'] = s['game_dir']
     if s['user_dir']:
         env['BB_USER_DIR'] = s['user_dir']
@@ -684,17 +704,18 @@ class Launcher:
         values = [v for v, _t in options]
         box = self.ttk.Combobox(parent, values=[_(*text) for _v, text in options],
                                state='normal' if key == 'output_res' else 'readonly', width=width)
+        box.bbport_values = values
         if var.get() not in values and key != 'output_res':
             var.set(values[0])
 
         def show(*_args):
             current = var.get()
-            if current in values:
-                box.current(values.index(current))
+            if current in box.bbport_values:
+                box.current(box.bbport_values.index(current))
             else:
                 box.set(current)
         show()
-        box.bind('<<ComboboxSelected>>', lambda _e: var.set(values[box.current()]))
+        box.bind('<<ComboboxSelected>>', lambda _e: var.set(box.bbport_values[box.current()]))
         if key == 'output_res':
             def custom(_event):
                 if box.current() >= 0:
@@ -949,7 +970,37 @@ class Launcher:
         f = self.scrolled_page('graphics', _('Graphics', 'Графика'),
                                _('Stored in bbport.ini; the in-game menu (Insert or L3+R3) changes the same values.',
                                  'Хранится в bbport.ini; в игре меняется через меню (Insert или L3+R3).'))
-        self.section(f, _('Upscaling', 'Апскейлинг'), top=4)
+        self.section(f, _('Frame generation & Reflex', 'Генерация кадров и Reflex'), top=4)
+        backend_box = self.choice(f, 'fg_backend', 'ini', FG_BACKENDS)
+        self.row(f, _('Generation backend', 'Бэкенд генерации'), backend_box,
+                 _('Select DLSS or FSR frame generation independently from temporal reconstruction.',
+                   'Выбор генерации кадров DLSS или FSR отдельно от реконструкции.'))
+
+        fg_var = self.var('frame_generation', 'ini')
+        fg_box = self.choice(f, 'frame_generation', 'ini',
+                             FG_MODES_DLSS if self.var('fg_backend', 'ini').get() == 'dlss' else FG_MODES_FSR)
+        self.row(f, _('Frame generation', 'Генерация кадров'), fg_box,
+                 _('DLSS supports Off/2x/3x/4x; FSR supports Off/2x only. Hardware support required; applies on restart.',
+                   'DLSS поддерживает Off/2x/3x/4x; FSR только Off/2x. Требуется поддержка оборудования; применится после перезапуска.'))
+
+        def on_backend_change(*_args):
+            b = self.var('fg_backend', 'ini').get()
+            modes = FG_MODES_DLSS if b == 'dlss' else FG_MODES_FSR
+            values = [v for v, _t in modes]
+            fg_box.bbport_values = values
+            fg_box.configure(values=[_(*t) for _v, t in modes])
+            if fg_var.get() not in values:
+                fg_var.set('2x' if fg_var.get() in ('3x', '4x') else values[0])
+            if fg_var.get() in values:
+                fg_box.current(values.index(fg_var.get()))
+
+        self.var('fg_backend', 'ini').trace_add('write', on_backend_change)
+
+        self.row(f, _('NVIDIA Reflex', 'NVIDIA Reflex'), self.choice(f, 'reflex', 'ini', REFLEX_MODES),
+                 _('Reduces latency with frame generation. Guarded by runtime capability; applies on restart.',
+                   'Снижает задержку при генерации кадров. Применяется после перезапуска.'))
+
+        self.section(f, _('Upscaling', 'Апскейлинг'), top=12)
         self.row(f, _('Upscaler', 'Апскейлер'), self.choice(f, 'upscaler', 'ini', UPSCALERS),
                  _("Temporal upscaling with the game's own motion vectors. FSR 4 needs its assets (below) and "
                    'a GPU with INT8 dot products; otherwise the game falls back to FSR 3.1 by itself.',
@@ -1775,13 +1826,15 @@ class Launcher:
         if info and info[1] != PATCH_VERSION:
             fps = ('30 FPS',)
         upscaler = dict(UPSCALERS).get(self.var('upscaler', 'ini').get(), ('?',))[0].split(' (')[0]
+        fg_val = self.var('frame_generation', 'ini').get()
+        fg_str = f' · FG {fg_val.upper()}' if fg_val and fg_val != 'off' else ''
         output = self.var('output_res', 'ini').get().replace('x', ' × ')
         online = _('Online') if self.var('online', 'app').get() else _('Offline')
         if self.var('online', 'app').get() and self.var('online_pool', 'app').get() == 'huntersdream':
             online = _("Online (The Hunter's Dream)")
         elif self.var('online', 'app').get() and self.var('online_pool', 'app').get() == 'supermedo':
             online = _('Online (SuperMedo Server)')
-        return f'{_(*fps)}   ·   {upscaler}   ·   {output}   ·   {online}'
+        return f'{_(*fps)}   ·   {upscaler}{fg_str}   ·   {output}   ·   {online}'
 
     def detect_gpu(self):
         exe = PORT_DIR / 'bin' / 'bb-gpu-capabilities.exe'
@@ -1976,7 +2029,7 @@ class Launcher:
             return
         self.set_log('')
         try:
-            self.process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=game_environment(self.app),
+            self.process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=game_environment(self.app, self.ini),
                                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                             stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
         except OSError as error:
@@ -2295,7 +2348,7 @@ def play_without_window(settings):
     log_dir.mkdir(parents=True, exist_ok=True)
     tracker = trophies.Tracker(log_dir)
     with open(log_dir / 'last_run.log', 'w', encoding='utf-8', buffering=1) as log:
-        process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=game_environment(settings),
+        process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=game_environment(settings, load_ini()[0]),
                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
         for raw in iter(process.stdout.readline, b''):

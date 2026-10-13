@@ -15,6 +15,8 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/texture_cache/texture_cache.h"
+#include "video_core/renderer_vulkan/vk_frame_generation.h"
+#include "video_core/renderer_vulkan/fg_timing.h"
 
 namespace Frontend {
 class WindowSDL;
@@ -25,6 +27,8 @@ struct Liverpool;
 }
 
 namespace Vulkan {
+
+struct FgFrameResources;
 
 struct Frame {
     u32 width;
@@ -37,6 +41,9 @@ struct Frame {
     u64 ready_tick;
     bool is_hdr{false};
     u8 id{};
+    std::shared_ptr<FgFrameResources> generation;
+    u64 reflex_frame_id{};
+    VAddr guest_address{};
 
 };
 
@@ -107,6 +114,10 @@ private:
     void RecreateFrame(Frame* frame, u32 width, u32 height);
 
     void SetExpectedGameSize(s32 width, s32 height);
+    void PrepareGeneration(Frame* frame, vk::Image full_color, vk::ImageLayout layout,
+                            u32 width, u32 height, bool srgb);
+    bool PresentOne(Frame* frame, vk::Image image, bool real);
+    void CountPresentation(bool real);
 
 private:
     float expected_ratio{1920.0 / 1080.0f};
@@ -136,6 +147,19 @@ private:
     std::condition_variable free_cv;
     std::condition_variable_any frame_cv;
     std::vector<VAddr> vo_buffers_addr;
+    std::unique_ptr<FrameGeneration> generation;
+    std::mutex generation_mutex;
+    FgHistory generation_history;
+    FgSchedule generation_schedule{true,true};
+    vk::UniqueDescriptorSetLayout hud_desc;
+    vk::UniquePipelineLayout hud_layout;
+    vk::UniquePipeline hud_pipeline;
+    int generation_factor{}, generation_backend{};
+    u64 presentation_count{}, source_count{}, generated_count{}, skipped_count{};
+    std::int64_t last_ready_ns{};
+    u64 last_ready_serial{};
+    u64 last_reflex_report{};
+    std::chrono::steady_clock::time_point counter_start{std::chrono::steady_clock::now()};
 };
 
 } // namespace Vulkan

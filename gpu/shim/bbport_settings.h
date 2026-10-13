@@ -15,6 +15,12 @@ enum Upscaler : int { UpscalerOff = 0, UpscalerFsr3 = 1, UpscalerFsr4 = 2, Upsca
 inline bool IsFsr4(int upscaler) {
     return upscaler == UpscalerFsr4 || upscaler == UpscalerFsr411;
 }
+enum FgBackend : int { FgDlss = 0, FgFsr = 1, FgBackendCount };
+enum ReflexMode : int { ReflexOff = 0, ReflexOn = 1, ReflexBoost = 2, ReflexModeCount };
+
+const char* FgBackendName(int backend);
+const char* ReflexModeName(int mode);
+const char* FrameGenName(int factor);
 enum Preset : int { NativeAA = 0, Quality, Balanced, Performance, UltraPerformance, PresetCount };
 enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugViewCount };
 
@@ -63,6 +69,13 @@ inline bool Ultrawide(int output) {
 
 struct Values {
     std::atomic<int> upscaler{UpscalerFsr3};
+    std::atomic<int> frame_generation{0}; ///< 0 Off, 2 (2x), 3 (3x), 4 (4x)
+    std::atomic<int> fg_backend{FgDlss};  ///< FgDlss (0), FgFsr (1)
+    std::atomic<int> reflex{ReflexOn};    ///< ReflexOff (0), ReflexOn (1), ReflexBoost (2)
+    std::atomic<bool> reflex_supported{true}; ///< Guarded by runtime capability
+    std::atomic<int> simulation_fps{0};   ///< Active simulation FPS / selected cap
+    std::atomic<float> source_fps{0.0f};  ///< Measured real game frames per second
+    std::atomic<float> display_fps{0.0f}; ///< Measured presents per second
     std::atomic<int> preset{NativeAA};
     std::atomic<bool> sharpen{true};
     std::atomic<float> sharpness{0.3f};
@@ -98,6 +111,9 @@ struct Values {
     /// Startup settings for the explicit BB_RENDER_RES compatibility patch only.
     int startup_preset = NativeAA;
     int startup_upscaler = UpscalerFsr3;
+    int startup_frame_generation = 0;
+    int startup_fg_backend = FgDlss;
+    int startup_reflex = ReflexOn;
     bool startup_object_motion = true;
     bool startup_effects[EffectCount]{};
     int startup_model_lod = 0;
@@ -114,12 +130,16 @@ void Load();
 void ConfigureUpscalerSupport(bool fsr4, bool fsr411);
 /// After device creation: DLSS availability; a DLSS setting falls back to FSR 3.1 without it.
 void ConfigureDlssSupport(bool available, const char* problem);
+/// Runtime reflex capability check: guards reflex support.
+void ConfigureReflexSupport(bool supported);
 /// Startup-patched scene dimensions cannot change until run.sh prepares a new image.
 bool FixedRenderSession();
 int RenderPreset();
 bool ResolutionNeedsRestart();
 /// Camera and HUD aspect changes require new guest patches on restart.
 bool AspectNeedsRestart();
+/// FG backend, factor or reflex mode changes take effect on restart.
+bool FrameGenNeedsRestart();
 /// Writes the file (menu changes).
 void Save();
 

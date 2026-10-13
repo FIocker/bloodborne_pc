@@ -18,6 +18,7 @@
 #include <queue>
 
 #include "bbport_toggles.h"
+#include "video_core/renderer_vulkan/vk_reflex.h"
 #include "common/assert.h"
 #include "common/interval_set.h"
 #include "common/unique_function.h"
@@ -699,6 +700,22 @@ public:
     /// Ends current rendering scope.
     void EndRendering();
 
+    /// bbport: Reflex frame attribution associated with this scheduler / recording batch.
+    void SetFrameId(u64 frame_id) {
+        recording_frame_id = frame_id;
+    }
+    [[nodiscard]] u64 GetFrameId() const noexcept {
+        return recording_frame_id;
+    }
+
+    /// bbport: Out-of-band queue marker configuration for compositor / presentation blits.
+    void SetOutOfBand(bool oob) {
+        is_out_of_band = oob;
+    }
+    [[nodiscard]] bool IsOutOfBand() const noexcept {
+        return is_out_of_band;
+    }
+
     /// Sets a function to be called on every scheduler submission.
     void SetSubmitCallback(SubmitFunc&& on_submit) {
         this->on_submit = std::move(on_submit);
@@ -898,6 +915,8 @@ private:
     DynamicState dynamic_state;
     SubmitFunc on_submit{};
     vk::CommandBuffer current_cmdbuf;
+    u64 recording_frame_id = 0;
+    bool is_out_of_band = false;
     std::condition_variable_any event_cv;
     struct PendingOp {
         Common::UniqueFunction<void> callback;

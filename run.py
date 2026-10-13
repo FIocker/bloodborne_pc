@@ -176,6 +176,13 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     env.setdefault('BB_CONFIG', str(data / 'bbport.ini'))
     config = env['BB_CONFIG']
+    for ini_k, env_k in (('frame_generation', 'BB_FRAME_GENERATION'),
+                         ('fg_backend', 'BB_FG_BACKEND'),
+                         ('reflex', 'BB_REFLEX')):
+        if not env.get(env_k):
+            val = ini_value(config, ini_k)
+            if val:
+                env[env_k] = val
     if not env.get('BB_FSR411_DIR') and not (PORT / 'fsr4_411').is_dir() and (data / 'fsr4_411').is_dir():
         env['BB_FSR411_DIR'] = str(data / 'fsr4_411')
 

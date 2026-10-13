@@ -12,6 +12,7 @@
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_dlss.h"
+#include "video_core/renderer_vulkan/vk_reflex.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 
@@ -200,6 +201,7 @@ Instance::Instance(const Frontend::WindowSystemInfo& window_info, s32 physical_d
 }
 
 Instance::~Instance() {
+    Reflex::Shutdown();
     ImGui::Core::Shutdown(GetDevice());
     vmaDestroyAllocator(allocator);
 }
@@ -431,6 +433,20 @@ bool Instance::CreateDevice() {
             }
         }
     }
+    // bbport: NVIDIA Reflex (VK_NV_low_latency2 rev3 + VK_KHR_present_id)
+    std::vector<const char*> reflex_extensions;
+    vk::PhysicalDevicePresentIdFeaturesKHR reflex_present_id{};
+    reflex_supported = Reflex::ConfigureDevice(physical_device, reflex_extensions,
+                                               vk12_features, reflex_present_id);
+    if (reflex_supported) {
+        for (const char* name : reflex_extensions) {
+            if (std::none_of(enabled_extensions.begin(), enabled_extensions.end(),
+                             [&](const char* e) { return std::string_view{e} == name; }) &&
+                enabled_extensions.size() < enabled_extensions.capacity()) {
+                enabled_extensions.push_back(name);
+            }
+        }
+    }
     vk::StructureChain device_chain = {
         vk::DeviceCreateInfo{
             .queueCreateInfoCount = 1u,
@@ -584,6 +600,9 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE{
             .shaderMixedFloatDotProductFloat16AccFloat32 = true,
         },
+        vk::PhysicalDevicePresentIdFeaturesKHR{
+            .presentId = reflex_supported,
+        },
     };
 
     if (!custom_border_color) {
@@ -641,6 +660,9 @@ bool Instance::CreateDevice() {
     if (!mixed_float_dot_product) {
         device_chain.unlink<vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE>();
     }
+    if (!reflex_supported) {
+        device_chain.unlink<vk::PhysicalDevicePresentIdFeaturesKHR>();
+    }
 
     auto [device_result, dev] = physical_device.createDeviceUnique(device_chain.get());
     if (device_result != vk::Result::eSuccess && enabled_extensions.size() > renderer_extension_count) {
@@ -670,9 +692,13 @@ bool Instance::CreateDevice() {
     if (Dlss* dlss = Dlss::Get()) {
         dlss->Initialize(*instance, physical_device, *device);
     }
+    Reflex::Initialize(*instance, physical_device, *device, reflex_supported);
 
     graphics_queue = device->getQueue(queue_family_index, 0);
     present_queue = device->getQueue(queue_family_index, 0);
+    if (reflex_supported && present_queue) {
+        Reflex::OnPresentQueueCreated(present_queue);
+    }
 
     if (calibrated_timestamps) {
         const auto [time_domains_result, time_domains] =

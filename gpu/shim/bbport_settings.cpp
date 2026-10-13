@@ -11,6 +11,43 @@
 #include <string_view>
 
 namespace BbSettings {
+const char* FgBackendName(int backend) {
+    static constexpr const char* names[FgBackendCount] = {"dlss", "fsr"};
+    return names[std::clamp(backend, 0, FgBackendCount - 1)];
+}
+
+const char* ReflexModeName(int mode) {
+    static constexpr const char* names[ReflexModeCount] = {"off", "on", "boost"};
+    return names[std::clamp(mode, 0, ReflexModeCount - 1)];
+}
+
+const char* FrameGenName(int factor) {
+    switch (factor) {
+    case 2: return "2x";
+    case 3: return "3x";
+    case 4: return "4x";
+    default: return "off";
+    }
+}
+
+int ParseFrameGen(const std::string& value) {
+    if (value == "2x" || value == "2") return 2;
+    if (value == "3x" || value == "3") return 3;
+    if (value == "4x" || value == "4") return 4;
+    return 0; // default/off
+}
+
+int ParseFgBackend(const std::string& value) {
+    if (value == "fsr" || value == "1") return FgFsr;
+    return FgDlss; // default/0
+}
+
+int ParseReflex(const std::string& value) {
+    if (value == "off" || value == "0") return ReflexOff;
+    if (value == "boost" || value == "2") return ReflexBoost;
+    return ReflexOn; // default/1/"on"
+}
+
 
 namespace {
 
@@ -32,6 +69,20 @@ void Set(Values& v, const std::string& key, const std::string& value) {
                 v.upscaler = u;
             }
         }
+    } else if (key == "frame_generation") {
+        int fg = ParseFrameGen(value);
+        if (v.fg_backend == FgFsr && fg > 2) {
+            fg = 2; // FSR FG supports Off / 2x only
+        }
+        v.frame_generation = fg;
+    } else if (key == "fg_backend") {
+        int b = ParseFgBackend(value);
+        v.fg_backend = b;
+        if (b == FgFsr && v.frame_generation > 2) {
+            v.frame_generation = 2; // clamp when switching to FSR
+        }
+    } else if (key == "reflex") {
+        v.reflex = ParseReflex(value);
     } else if (key == "preset") {
         v.preset = std::clamp(i, 0, PresetCount - 1);
     } else if (key == "sharpen") {
@@ -104,6 +155,10 @@ Values& Get() {
 
 void Load() {
     auto& v = Get();
+    static bool initialized = false;
+    v.frame_generation = 0;
+    v.fg_backend = FgDlss;
+    v.reflex = ReflexOn;
     for (int e = 0; e < EffectCount; ++e) {
         v.effects[e] = Effects[e].default_on;
     }
@@ -128,6 +183,15 @@ void Load() {
             if (std::strcmp(env, UpscalerName(u)) == 0) v.upscaler = u;
         }
     }
+    if (const char* env = std::getenv("BB_FG_BACKEND")) {
+        Set(v, "fg_backend", env);
+    }
+    if (const char* env = std::getenv("BB_FRAME_GENERATION")) {
+        Set(v, "frame_generation", env);
+    }
+    if (const char* env = std::getenv("BB_REFLEX")) {
+        Set(v, "reflex", env);
+    }
     const std::pair<const char*, const char*> env_keys[] = {
         {"BB_FSR_SHARPNESS", "sharpness"},        {"BB_JITTER", "jitter"},
         {"BB_REACTIVE", "reactive"},              {"BB_REACTIVE_SCALE", "reactive_scale"},
@@ -139,6 +203,12 @@ void Load() {
         if (const char* value = std::getenv(env)) {
             Set(v, key, value);
         }
+    }
+    if (!initialized) {
+        v.startup_frame_generation = v.frame_generation;
+        v.startup_fg_backend = v.fg_backend;
+        v.startup_reflex = v.reflex;
+        initialized = true;
     }
     v.startup_preset = v.preset;
     v.startup_upscaler = v.upscaler;
@@ -177,6 +247,21 @@ void ConfigureDlssSupport(bool available, const char* problem) {
                     kept.empty() ? "bbport_dlss.dll or nvngx_dlss.dll missing" : kept.c_str());
         v.upscaler = UpscalerFsr3;
     }
+}
+
+void ConfigureReflexSupport(bool supported) {
+    auto& v = Get();
+    v.reflex_supported = supported;
+    if (!supported && v.reflex != ReflexOff) {
+        v.reflex = ReflexOff;
+    }
+}
+
+bool FrameGenNeedsRestart() {
+    const auto& v = Get();
+    return v.frame_generation != v.startup_frame_generation ||
+           v.fg_backend != v.startup_fg_backend ||
+           v.reflex != v.startup_reflex;
 }
 
 bool FixedRenderSession() {
@@ -218,10 +303,13 @@ void Save() {
     }
     std::fprintf(file,
                  "# bbport settings (in-game menu: Insert / L3+R3)\n"
-                 "upscaler=%s\npreset=%d\nsharpen=%d\nsharpness=%.2f\njitter=%d\n"
+                 "upscaler=%s\nframe_generation=%s\nfg_backend=%s\nreflex=%s\n"
+                 "preset=%d\nsharpen=%d\nsharpness=%.2f\njitter=%d\n"
                  "reactive=%d\nobject_motion=%d\nreactive_scale=%.2f\nreactive_threshold=%.2f\nreactive_max=%.2f\n"
                  "debug_view=%d\nshow_fps=%d\nfsr4_auto_exposure=%d\nfsr4_invert_jitter=%d\n",
-                 UpscalerName(v.upscaler), v.preset.load(), int(v.sharpen.load()),
+                 UpscalerName(v.upscaler), FrameGenName(v.frame_generation.load()),
+                 FgBackendName(v.fg_backend.load()), ReflexModeName(v.reflex.load()),
+                 v.preset.load(), int(v.sharpen.load()),
                  v.sharpness.load(), int(v.jitter.load()), int(v.reactive.load()),
                  int(v.object_motion.load()),
                  v.reactive_scale.load(), v.reactive_threshold.load(), v.reactive_max.load(),

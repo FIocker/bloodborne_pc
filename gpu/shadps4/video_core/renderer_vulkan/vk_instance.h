@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "video_core/renderer_vulkan/vk_platform.h"
+#include "video_core/renderer_vulkan/vk_reflex.h"
 
 #define TRACY_VK_USE_SYMBOL_TABLE
 #include <tracy/TracyVulkan.hpp>
@@ -140,6 +141,10 @@ public:
     /// Returns true if VK_KHR_maintenance8 is supported
     bool IsMaintenance8Supported() const {
         return maintenance_8;
+    }
+
+    bool IsReflexSupported() const {
+        return reflex_supported;
     }
 
     /// Returns true if VK_EXT_attachment_feedback_loop_layout is supported
@@ -296,6 +301,11 @@ public:
     /// bbport: FSR 4.1.1 (INT8 model passes and VK_VALVE_shader_mixed_float_dot_product).
     bool IsFsr411Supported() const {
         return IsFsr4Int8Supported() && mixed_float_dot_product;
+    }
+
+    /// bbport: Frame Generation FSR provider requirements (VK_KHR_compute_shader_derivatives + linear group).
+    bool IsFsrGenerationSupported() const {
+        return compute_shader_derivatives && compute_shader_derivatives_features.computeDerivativeGroupLinear;
     }
 
     /// VK_KHR_shader_clock is supported.
@@ -574,6 +584,7 @@ private:
     bool compute_shader_derivatives{};
     bool mixed_float_dot_product{}; // bbport: VK_VALVE_shader_mixed_float_dot_product (FSR 4.1.1)
     bool supports_memory_budget{};
+    bool reflex_supported{};
     bool supports_block_texel_view{};
     u64 total_memory_budget{};
     std::vector<size_t> valid_heaps;

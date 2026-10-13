@@ -20,6 +20,7 @@
 #include "imgui/renderer/texture_manager.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_reflex.h"
 #include "bbport_threads.h"
 
 namespace Vulkan {
@@ -377,6 +378,10 @@ void Scheduler::PopPendingOperations() {
 }
 
 void Scheduler::AllocateWorkerCommandBuffers() {
+    // Stash the simulation frame ID at recording begin so submissions preserve recording identity
+    recording_frame_id = Reflex::CurrentSimFrameId();
+    Reflex::SetRecordingFrameId(recording_frame_id);
+
     const vk::CommandBufferBeginInfo begin_info = {
         .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
     };
@@ -438,7 +443,9 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         .pSignalSemaphoreValues = info.signal_ticks.data(),
     };
 
-    const vk::SubmitInfo submit_info = {
+    VkLatencySubmissionPresentIdNV attribution{};
+    u64 submit_reflex_id = recording_frame_id;
+    vk::SubmitInfo submit_info = {
         .pNext = &timeline_si,
         .waitSemaphoreCount = info.num_wait_semas,
         .pWaitSemaphores = info.wait_semas.data(),
@@ -449,8 +456,25 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         .pSignalSemaphores = info.signal_semas.data(),
     };
 
+    if (submit_reflex_id && instance.IsReflexSupported()) {
+        Reflex::PrepareSubmit(instance.GetGraphicsQueue(), submit_reflex_id, submit_info, attribution);
+        if (is_out_of_band) {
+            Reflex::OnForeignSubmitBegin(submit_reflex_id);
+        } else {
+            Reflex::OnRenderSubmitBegin(submit_reflex_id);
+        }
+    }
+
     ImGui::Core::TextureManager::Submit();
     auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+
+    if (submit_reflex_id && instance.IsReflexSupported()) {
+        if (is_out_of_band) {
+            Reflex::OnForeignSubmitEnd(submit_reflex_id);
+        } else {
+            Reflex::OnRenderSubmitEnd(submit_reflex_id);
+        }
+    }
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 
     work_semaphore.Refresh();
