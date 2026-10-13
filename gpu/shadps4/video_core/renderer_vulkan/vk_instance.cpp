@@ -696,7 +696,7 @@ bool Instance::CreateDevice() {
 
     graphics_queue = device->getQueue(queue_family_index, 0);
     present_queue = device->getQueue(queue_family_index, 0);
-    if (reflex_supported && present_queue) {
+    if (reflex_supported && present_queue && present_queue != graphics_queue) {
         Reflex::OnPresentQueueCreated(present_queue);
     }
 

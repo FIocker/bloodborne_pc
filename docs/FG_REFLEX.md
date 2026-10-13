@@ -31,12 +31,12 @@ FSR supports Off/2x; selecting FSR clamps a higher multiplier to 2x. Unsupported
 - `BB_REFLEX_TIMING=1`: logs available driver latency reports. These are not input-to-photon measurements.
 - `BB_FG_CAPTURE_DIR=<folder>`: captures one generated frame once its rendered serial reaches `BB_FG_CAPTURE_FRAME` (default 120). Files are written in `frame_<serial>` after the draw timeline completes. Readback can affect performance; keep it off during pacing measurements.
 
-Captures contain `depth.bin` (R32 hardware depth in 0..1), `motion.bin` (RG16 current-to-previous motion in render pixels), `color_rgba8.raw`, `full_rgba8.raw`, `generated_N_rgba8.raw` and `guides_manifest.json`. The manifest identifies render/output sizes, frame IDs, jitter and camera parameters.
+Captures contain `depth.bin` (R32 hardware depth in 0..1), `motion.bin` (RG16 current-to-previous motion in render pixels), scene/UI/display snapshots, generated images and `guides_manifest.json`. `ui_rgba8.raw` captures UI before the final display shader, in the same encoding as the HUDless scene. `presented_N.raw` and `presented_real.raw` contain the fitted images after post processing. The manifest identifies render/output/presentation sizes and formats, frame IDs, jitter and camera parameters. Use its format fields when decoding raw channel order.
 
 Analyze a capture with `python tools/windows/analyze_fg_guides.py <capture-folder>/frame_<serial>`. Other scripts analyze PresentMon CSVs, Reflex logs and process-memory CSVs; use their `--help` for accepted formats.
 
 ## Validation and package
 
-Compilation, CPU regression tests, shader validation and isolated launcher-widget checks are performed without running the game or creating a GPU device. GPU frame pacing, image quality, effective multipliers, latency and long-run memory behavior still require runtime validation.
+Compilation, CPU regression tests, shader validation and isolated launcher-widget checks are complemented by Windows gameplay tests. See [GPU validation](GPU_VALIDATION.md) for tested conditions and remaining limits. These short runs do not establish long-run memory stability or end-to-end input latency.
 
 The package includes the paired ABI-2 `bbport_dlss.dll`, `nvngx_dlss.dll`, `nvngx_dlssg.dll`, existing FSR assets, diagnostic tools and license notices. NVIDIA SDK terms, original MIT bridge notices and GPL-3.0 notices for adapted bbhost code are retained.

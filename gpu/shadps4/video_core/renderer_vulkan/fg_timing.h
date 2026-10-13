@@ -81,6 +81,12 @@ public:
             cadence_valid_ = false;
             launch_variation_ = 0;
         }
+        // A source-frame limiter can hold an already completed frame before
+        // this presenter receives it. GPU time still measures source cadence,
+        // but that earlier completion cannot be used as a presentation phase:
+        // every interpolated slot would already have expired at a 30 FPS cap.
+        // Start the owned output sequence no earlier than the permitted flip.
+        source_host_ = low_latency_ ? host_ready : std::max(source_host_, host_ready);
         last_source_ = source; last_render_ = render;
     }
     std::int64_t deadline(unsigned position, unsigned factor) const {
@@ -90,7 +96,10 @@ public:
         // compositor budget leaves room to prepare it without holding every
         // real endpoint for an additional generated-frame interval.
         if (low_latency_) {
-            const auto lead = std::min(2000000 + launch_variation_, std::max<std::int64_t>(2000000, period() / factor));
+            // Keep this preparation allowance fixed. Growing it in response to
+            // a late readback/display wake feeds our own waits into measured
+            // source cadence and can turn a short stall into seconds at 20 FPS.
+            constexpr std::int64_t lead = 2000000;
             return source_host_ + lead + period() * (step ? step - 1 : 0) / factor;
         }
         return source_host_ + period() * step / factor;

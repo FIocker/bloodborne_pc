@@ -49,7 +49,7 @@
 namespace Vulkan {
 
 struct FgFrameResources {
-    FgImage color, full, depth, motion;
+    FgImage color, full, depth, motion, ui;
     std::array<FgImage,3> outputs, presented;
     std::array<vk::ImageView,3> srgb_views{};
     vk::Device device{};
@@ -58,6 +58,7 @@ struct FgFrameResources {
     u32 count{};
     float frame_ms{16.6667f};
     bool timestamp_valid{};
+    vk::Format sample_format{};
     ~FgFrameResources() {
         for (auto view : srgb_views) if (view) device.destroyImageView(view);
         if (timestamps) device.destroyQueryPool(timestamps);
@@ -395,7 +396,7 @@ static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandB
 // draw timeline completes; never read an image that a later frame can overwrite.
 static void CaptureFg(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmd,
                       const FgFrameResources& resources, const BbDlssCamera& camera,
-                      u64 reflex_id, bool reset) {
+                      u64 reflex_id, bool reset, const Frame& frame) {
     static const char* directory = std::getenv("BB_FG_CAPTURE_DIR");
     static const u64 first = [] {
         const char* value = std::getenv("BB_FG_CAPTURE_FRAME");
@@ -422,9 +423,9 @@ static void CaptureFg(const Instance& instance, Scheduler& scheduler, vk::Comman
     };
     const auto capture = std::make_shared<Capture>();
     capture->allocator = instance.GetAllocator();
-    const auto add = [&](const FgImage& image, const char* name) {
-        Readback b{.bytes = VkDeviceSize(image.width) * image.height * 4,
-                   .image = image.image, .width = image.width, .height = image.height, .name = name};
+    const auto add_raw = [&](vk::Image image, u32 width, u32 height, const char* name) {
+        Readback b{.bytes = VkDeviceSize(width) * height * 4,
+                   .image = image, .width = width, .height = height, .name = name};
         const VkBufferCreateInfo ci{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                                     .size = b.bytes, .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
         const VmaAllocationCreateInfo allocation{
@@ -436,12 +437,19 @@ static void CaptureFg(const Instance& instance, Scheduler& scheduler, vk::Comman
         capture->buffers.push_back(std::move(b));
         return true;
     };
+    const auto add = [&](const FgImage& image, const char* name) {
+        return add_raw(image.image,image.width,image.height,name);
+    };
     if (!add(resources.depth, "depth.bin") || !add(resources.motion, "motion.bin") ||
-        !add(resources.color, "color_rgba8.raw") || !add(resources.full, "full_rgba8.raw")) return;
+        !add(resources.color, "color_rgba8.raw") || !add(resources.full, "full_rgba8.raw") ||
+        !add(resources.ui, "ui_rgba8.raw")) return;
     for (u32 i = 0; i < resources.count; ++i) {
         const auto name = "generated_" + std::to_string(i + 1) + "_rgba8.raw";
         if (!add(resources.outputs[i], name.c_str())) return;
+        const auto fitted = "presented_" + std::to_string(i + 1) + ".raw";
+        if (!add(resources.presented[i], fitted.c_str())) return;
     }
+    if (!add_raw(frame.image,frame.width,frame.height,"presented_real.raw")) return;
     const auto path = std::filesystem::path(directory) / ("frame_" + std::to_string(resources.serial));
     std::error_code ec;
     std::filesystem::create_directories(path, ec);
@@ -464,6 +472,10 @@ static void CaptureFg(const Instance& instance, Scheduler& scheduler, vk::Comman
         << ",\"height\":" << resources.depth.height
         << ",\"output_width\":" << resources.color.width
         << ",\"output_height\":" << resources.color.height
+        << ",\"sample_format\":" << u32(resources.sample_format)
+        << ",\"presentation_width\":" << frame.width
+        << ",\"presentation_height\":" << frame.height
+        << ",\"presentation_format\":" << u32(resources.presented[0].format)
         << ",\"depth_format\":100,\"motion_format\":83,\"render_frame_index\":" << resources.serial
         << ",\"frame_index\":" << resources.serial << ",\"reflex_frame_id\":" << reflex_id
         << ",\"frame_ms\":" << resources.frame_ms << ",\"reset\":" << (reset ? "true" : "false")
@@ -609,8 +621,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             .image=display.image,.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1}};
         cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount=1,.pImageMemoryBarriers=&read});
         PrepareGeneration(frame,display.image,vk::ImageLayout::eTransferSrcOptimal,
-            display.width,display.height,view_info.format == vk::Format::eR8G8B8A8Srgb ||
-            view_info.format == vk::Format::eB8G8R8A8Srgb);
+            display.width,display.height,view_info.format,display.format);
         auto restore=read;
         restore.srcStageMask=vk::PipelineStageFlagBits2::eTransfer;
         restore.srcAccessMask=vk::AccessFlagBits2::eTransferRead;
@@ -737,9 +748,16 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
 }
 
 void Presenter::PrepareGeneration(Frame* frame, vk::Image full_color, vk::ImageLayout layout,
-                                  u32 sw, u32 sh, bool srgb) {
+                                  u32 sw, u32 sh, vk::Format sample_format, vk::Format source_format) {
+    const bool srgb=sample_format == vk::Format::eR8G8B8A8Srgb ||
+                    sample_format == vk::Format::eB8G8R8A8Srgb;
+    if (source_format != vk::Format::eR8G8B8A8Srgb &&
+        source_format != vk::Format::eR8G8B8A8Unorm) {
+        generation_history.clear();
+        return;
+    }
     const auto guides = rasterizer->GetUpscaler().FrameGenerationGuides(frame->guest_address);
-    if (!guides.valid || !guides.serial || guides.output_width != sw || guides.output_height != sh) {
+    if (!guides.valid || !guides.serial || !guides.ui || guides.output_width != sw || guides.output_height != sh) {
         generation_history.clear();
         return;
     }
@@ -757,12 +775,14 @@ void Presenter::PrepareGeneration(Frame* frame, vk::Image full_color, vk::ImageL
     resources.timestamp_valid=false;
     if (!resources.color.Ensure(instance,sw,sh,vk::Format::eR8G8B8A8Unorm) ||
         !resources.full.Ensure(instance,sw,sh,vk::Format::eR8G8B8A8Unorm) ||
+        !resources.ui.Ensure(instance,sw,sh,vk::Format::eR8G8B8A8Unorm) ||
         !resources.depth.Ensure(instance,guides.render_width,guides.render_height,vk::Format::eR32Sfloat) ||
         !resources.motion.Ensure(instance,guides.render_width,guides.render_height,vk::Format::eR16G16Sfloat)) return;
     const u32 count=std::min<u32>(generation_factor-1,generation->MaxGenerated(generation_backend));
     if (!count) return;
     for (u32 i=0;i<count;++i) {
-        if (resources.outputs[i].width != sw || resources.outputs[i].height != sh) {
+        if (resources.outputs[i].width != sw || resources.outputs[i].height != sh ||
+            resources.sample_format != sample_format) {
             if (resources.srgb_views[i]) resources.device.destroyImageView(resources.srgb_views[i]);
             resources.srgb_views[i]=nullptr;
         }
@@ -770,12 +790,16 @@ void Presenter::PrepareGeneration(Frame* frame, vk::Image full_color, vk::ImageL
             !resources.presented[i].Ensure(instance,frame->width,frame->height,
                                             swapchain.GetSurfaceFormat().format,false)) return;
         if (srgb && !resources.srgb_views[i]) {
+            const vk::ImageViewUsageCreateInfo sampled_usage{.usage=vk::ImageUsageFlagBits::eSampled};
             resources.srgb_views[i]=Check(resources.device.createImageView({
+                .pNext=&sampled_usage,
                 .image=resources.outputs[i].image,.viewType=vk::ImageViewType::e2D,
-                .format=vk::Format::eR8G8B8A8Srgb,
+                // Match the ordinary display view, including its channel order.
+                .format=sample_format,
                 .subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1}}));
         }
     }
+    resources.sample_format=sample_format;
     const auto cmd=draw_scheduler.CommandBuffer();
     const auto families=instance.GetPhysicalDevice().getQueueFamilyProperties();
     if (families[instance.GetGraphicsQueueFamilyIndex()].timestampValidBits) {
@@ -793,11 +817,21 @@ void Presenter::PrepareGeneration(Frame* frame, vk::Image full_color, vk::ImageL
             .image=image,.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1}};
         cmd.pipelineBarrier2({.imageMemoryBarrierCount=1,.pImageMemoryBarriers=&b});
     };
-    readable(guides.color); readable(guides.depth); readable(guides.motion);
+    readable(guides.color); readable(guides.depth); readable(guides.motion); readable(guides.ui);
     FgCopy(cmd,guides.color,vk::ImageLayout::eGeneral,sw,sh,resources.color);
     FgCopy(cmd,guides.depth,vk::ImageLayout::eGeneral,guides.render_width,guides.render_height,resources.depth);
     FgCopy(cmd,guides.motion,vk::ImageLayout::eGeneral,guides.render_width,guides.render_height,resources.motion);
-    FgCopy(cmd,full_color,layout,sw,sh,resources.full);
+    FgCopy(cmd,guides.ui,vk::ImageLayout::eGeneral,sw,sh,resources.ui);
+    // Keep encoded RGBA bytes. An sRGB-to-UNORM blit decodes this display
+    // buffer while the HUDless reconstruction remains encoded. That mismatch
+    // masks the entire scene and replaces interpolated pixels with real ones.
+    resources.full.General(cmd, vk::AccessFlagBits2::eTransferWrite);
+    const vk::ImageCopy full_copy{
+        .srcSubresource={vk::ImageAspectFlagBits::eColor,0,0,1},
+        .dstSubresource={vk::ImageAspectFlagBits::eColor,0,0,1},
+        .extent={sw,sh,1}};
+    cmd.copyImage(full_color,layout,resources.full.image,vk::ImageLayout::eGeneral,full_copy);
+    resources.full.General(cmd);
     std::array<FrameGeneration::Output,3> outputs{};
     for (u32 i=0;i<count;++i) {
         resources.outputs[i].General(cmd);
@@ -817,6 +851,8 @@ void Presenter::PrepareGeneration(Frame* frame, vk::Image full_color, vk::ImageL
             vk::DescriptorSetLayoutBinding{.binding=1,.descriptorType=vk::DescriptorType::eSampledImage,
                 .descriptorCount=1,.stageFlags=vk::ShaderStageFlagBits::eCompute},
             vk::DescriptorSetLayoutBinding{.binding=2,.descriptorType=vk::DescriptorType::eStorageImage,
+                .descriptorCount=1,.stageFlags=vk::ShaderStageFlagBits::eCompute},
+            vk::DescriptorSetLayoutBinding{.binding=3,.descriptorType=vk::DescriptorType::eSampledImage,
                 .descriptorCount=1,.stageFlags=vk::ShaderStageFlagBits::eCompute}};
         hud_desc=Check(device.createDescriptorSetLayoutUnique({
             .flags=vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
@@ -833,11 +869,13 @@ void Presenter::PrepareGeneration(Frame* frame, vk::Image full_color, vk::ImageL
         const std::array infos{
             vk::DescriptorImageInfo{.imageView=resources.full.view,.imageLayout=vk::ImageLayout::eGeneral},
             vk::DescriptorImageInfo{.imageView=resources.color.view,.imageLayout=vk::ImageLayout::eGeneral},
-            vk::DescriptorImageInfo{.imageView=output.view,.imageLayout=vk::ImageLayout::eGeneral}};
+            vk::DescriptorImageInfo{.imageView=output.view,.imageLayout=vk::ImageLayout::eGeneral},
+            vk::DescriptorImageInfo{.imageView=resources.ui.view,.imageLayout=vk::ImageLayout::eGeneral}};
         const std::array writes{
             vk::WriteDescriptorSet{.dstBinding=0,.descriptorCount=1,.descriptorType=vk::DescriptorType::eSampledImage,.pImageInfo=&infos[0]},
             vk::WriteDescriptorSet{.dstBinding=1,.descriptorCount=1,.descriptorType=vk::DescriptorType::eSampledImage,.pImageInfo=&infos[1]},
-            vk::WriteDescriptorSet{.dstBinding=2,.descriptorCount=1,.descriptorType=vk::DescriptorType::eStorageImage,.pImageInfo=&infos[2]}};
+            vk::WriteDescriptorSet{.dstBinding=2,.descriptorCount=1,.descriptorType=vk::DescriptorType::eStorageImage,.pImageInfo=&infos[2]},
+            vk::WriteDescriptorSet{.dstBinding=3,.descriptorCount=1,.descriptorType=vk::DescriptorType::eSampledImage,.pImageInfo=&infos[3]}};
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute,*hud_pipeline);
         cmd.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute,*hud_layout,0,writes);
         cmd.dispatch((sw+7)/8,(sh+7)/8,1);
@@ -870,7 +908,7 @@ void Presenter::PrepareGeneration(Frame* frame, vk::Image full_color, vk::ImageL
     }
     if (resources.timestamp_valid)
         cmd.writeTimestamp2(vk::PipelineStageFlagBits2::eAllCommands,resources.timestamps,1);
-    CaptureFg(instance, draw_scheduler, cmd, resources, guides.camera, frame->reflex_frame_id, input.reset);
+    CaptureFg(instance, draw_scheduler, cmd, resources, guides.camera, frame->reflex_frame_id, input.reset,*frame);
 }
 
 void Presenter::CountPresentation(bool real) {
@@ -916,9 +954,18 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
             float frame_ms=resources.frame_ms;
             if (!source_ns && last_ready_ns && resources.serial>last_ready_serial)
                 frame_ms=float(now-last_ready_ns)/float(resources.serial-last_ready_serial)/1e6f;
-            int cap=0;
-            if (const char* setting=std::getenv("BB_FPS")) cap=std::atoi(setting);
+            int cap = EmulatorSettings.GetFrameLimit();
+            if (!cap) {
+                if (const char* setting=std::getenv("BB_FPS")) cap=std::atoi(setting);
+            }
             generation_schedule.observe(source_ns,ready_ns,resources.serial,now,frame_ms,cap);
+            if (std::getenv("BB_FG_TIMING") && resources.serial % 30 == 0) {
+                std::printf("FG phase: serial=%llu period_ms=%.3f evaluation_ms=%.3f first_lag_ms=%.3f real_lag_ms=%.3f\n",
+                    (unsigned long long)resources.serial,generation_schedule.period()/1e6,
+                    ready_ns>=source_ns ? (ready_ns-source_ns)/1e6 : 0.0,
+                    (now-generation_schedule.deadline(1,count+1))/1e6,
+                    (now-generation_schedule.deadline(count+1,count+1))/1e6);
+            }
             last_ready_ns=now; last_ready_serial=resources.serial;
             unsigned position=1;
             while (position<=count) {

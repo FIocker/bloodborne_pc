@@ -125,8 +125,8 @@ public:
     bool DisplayOverride(VAddr address, Display& display);
 
     struct GenerationGuides {
-        vk::Image color{}, depth{}, motion{};
-        vk::ImageView color_view{}, depth_view{}, motion_view{};
+        vk::Image color{}, depth{}, motion{}, ui{};
+        vk::ImageView color_view{}, depth_view{}, motion_view{}, ui_view{};
         u32 output_width{}, output_height{}, render_width{}, render_height{};
         BbDlssCamera camera{};
         u64 serial{};
@@ -259,7 +259,7 @@ private:
         vk::Format format{};
         u32 width = 0, height = 0;
         bool valid = false;
-        FgImage fg_color, fg_depth, fg_motion;
+        FgImage fg_color, fg_depth, fg_motion, fg_ui;
         GenerationGuides guides{};
     };
     std::mutex display_mutex;
@@ -301,7 +301,7 @@ private:
     vk::UniqueImageView extra_sharpen_view;
     u32 extra_sharpen_width = 0, extra_sharpen_height = 0;
     vk::UniqueImageView ui_storage_view;
-    FgImage fg_color, fg_depth, fg_motion;
+    FgImage fg_color, fg_depth, fg_motion, fg_ui;
     GenerationGuides fg_pending{}, fg_completed{};
     u64 fg_render_serial{1};
     vk::UniqueDescriptorSetLayout fg_depth_desc;

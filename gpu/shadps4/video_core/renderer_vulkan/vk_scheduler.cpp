@@ -457,7 +457,11 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     };
 
     if (submit_reflex_id && instance.IsReflexSupported()) {
-        Reflex::PrepareSubmit(instance.GetGraphicsQueue(), submit_reflex_id, submit_info, attribution);
+        // Presentation blits share the graphics queue. Their regular frame ID
+        // would replace game-render attribution with a tiny copy submission.
+        const auto attributed = Reflex::PrepareSubmit(instance.GetGraphicsQueue(),
+            is_out_of_band ? 0 : submit_reflex_id, submit_info, attribution);
+        if (!is_out_of_band) submit_reflex_id = attributed;
         if (is_out_of_band) {
             Reflex::OnForeignSubmitBegin(submit_reflex_id);
         } else {

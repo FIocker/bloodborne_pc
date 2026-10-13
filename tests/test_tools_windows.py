@@ -109,7 +109,8 @@ class AnalyzeFgGuidesTests(unittest.TestCase):
 
 
 class AnalyzePresentmonTests(unittest.TestCase):
-    def test_valid_presentmon_csv_parsing(self):
+    def test_presentmon_v2_schema(self):
+        # PresentMon v2 with TimeInMs and PascalCase headers
         with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
             writer = csv.writer(f)
             writer.writerow(["Application", "ProcessID", "SwapChainAddress", "TimeInMs", "MsBetweenDisplayChange", "MsBetweenPresents", "PresentMode"])
@@ -124,6 +125,37 @@ class AnalyzePresentmonTests(unittest.TestCase):
             self.assertIn("bbport.exe", res.stdout)
             self.assertIn("actual display cadence", res.stdout)
             self.assertIn("display interval ms", res.stdout)
+        finally:
+            f_path.unlink(missing_ok=True)
+
+    def test_presentmon_v1_actual_header_schema(self):
+        # PresentMon 2.6 v1 actual schema with TimeInSeconds and mixed/camelCase headers
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "Application", "ProcessID", "SwapChainAddress", "Runtime", "SyncInterval",
+                "PresentFlags", "Dropped", "TimeInSeconds", "msInPresentAPI", "msBetweenPresents",
+                "AllowsTearing", "PresentMode", "msUntilRenderComplete", "msUntilDisplayed",
+                "msBetweenDisplayChange", "msFlipDelay", "msUntilRenderStart", "msGPUActive", "msSinceInput"
+            ])
+            # 80s to 120s window with ~60 FPS intervals
+            for frame_idx in range(5000, 7500):
+                t_sec = frame_idx * 0.016666667
+                writer.writerow([
+                    "bb-probe.exe", "9208", "0x000000005923C3A0", "DXGI", "1", "0", "0",
+                    f"{t_sec:.8f}", "0.5", "16.667", "0", "Hardware Composed: Independent Flip",
+                    "8.0", "16.0", "16.667", "0.0", "0.0", "8.0", "0.0"
+                ])
+            f_path = Path(f.name)
+
+        try:
+            res = subprocess.run([sys.executable, str(TOOLS_WIN / "analyze_presentmon.py"), str(f_path),
+                                  "--after-ms", "85000", "--before-ms", "115000"],
+                                 capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0)
+            self.assertIn("bb-probe.exe PID 9208 swapchain 0x000000005923C3A0", res.stdout)
+            self.assertIn("actual display cadence: 60.00 FPS", res.stdout)
+            self.assertIn("Hardware Composed: Independent Flip", res.stdout)
         finally:
             f_path.unlink(missing_ok=True)
 

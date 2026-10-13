@@ -9,6 +9,22 @@
 #include "gpu/shadps4/video_core/renderer_vulkan/fg_timing.h"
 
 int main() {
+    // Vulkan may complete a source frame before VideoOut's source cap permits
+    // presenting it. That cap delay must not permanently expire all FG slots.
+    for (unsigned factor : {2u, 3u, 4u}) {
+        Vulkan::FgSchedule capped(true, true);
+        for (unsigned frame = 1; frame < 200; ++frame) {
+            const auto gpu = 1000000000ull + frame * 33333333ull;
+            const auto host = static_cast<std::int64_t>(gpu) + 5000000000ll;
+            // Establish a close calibration, then introduce sustained flip wait.
+            const auto permitted = host + (frame < 3 ? 2000000ll : 45000000ll);
+            capped.observe(gpu, gpu + 1500000, frame, permitted, 33.333f, 30);
+            assert(capped.deadline(1, factor) >= permitted);
+            assert(capped.deadline(1, factor) == permitted + 2000000ll);
+            assert(capped.next_position(1, factor, permitted) == 1);
+            assert(capped.deadline(factor, factor) <= permitted + 66666666ll);
+        }
+    }
     // 1. History tracking: separate rendered frame serials from accepted presentation flips.
     Vulkan::FgHistory history;
     assert(history.needs_reset(1));
@@ -108,7 +124,9 @@ int main() {
     // Presentation delay must not become the next source frame's GPU period.
     schedule.observe(150000000, 154000000, 3, start + 80000000ll, 16.7f, 60);
     assert(schedule.period() == 25000000ll);
-    assert(schedule.deadline(4, 4) == start + 75000000ll);
+    // Cadence stays at 25 ms, but a delayed permitted flip restarts the
+    // presentation phase instead of reusing deadlines already in the past.
+    assert(schedule.deadline(4, 4) == start + 105000000ll);
 
     // Lost presentation frames retain per-render cadence rather than expanding it.
     schedule.observe(200000000, 204000000, 5, start + 100000000ll, 16.7f, 60);

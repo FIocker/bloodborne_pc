@@ -269,6 +269,25 @@ bool TemporalUpscaler::RasterScaling() const {
 }
 
 bool TemporalUpscaler::OnFrameStart() {
+    if (fg_pending.valid && ui_image) {
+        // Capture the completed UI in the same surface/encoding as the scene
+        // snapshot, before the game's final display shader transforms it.
+        scheduler.EndRendering();
+        if (fg_ui.width != ui_width || fg_ui.height != ui_height) scheduler.WaitSubmitted();
+        if (fg_ui.Ensure(instance,ui_width,ui_height,vk::Format::eR8G8B8A8Unorm)) {
+            const auto cmd=scheduler.CommandBuffer();
+            const vk::ImageMemoryBarrier2 ready{
+                .srcStageMask=vk::PipelineStageFlagBits2::eAllCommands,
+                .srcAccessMask=vk::AccessFlagBits2::eMemoryRead|vk::AccessFlagBits2::eMemoryWrite,
+                .dstStageMask=vk::PipelineStageFlagBits2::eTransfer,
+                .dstAccessMask=vk::AccessFlagBits2::eTransferRead,
+                .oldLayout=vk::ImageLayout::eGeneral,.newLayout=vk::ImageLayout::eGeneral,
+                .image=vk::Image(ui_image),.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1}};
+            cmd.pipelineBarrier2({.imageMemoryBarrierCount=1,.pImageMemoryBarriers=&ready});
+            FgCopy(cmd,vk::Image(ui_image),vk::ImageLayout::eGeneral,ui_width,ui_height,fg_ui);
+            fg_pending.ui=fg_ui.image; fg_pending.ui_view=fg_ui.view;
+        } else fg_pending.valid=false;
+    }
     fg_completed = fg_pending;
     fg_pending = {};
     ++fg_render_serial;
@@ -1996,7 +2015,8 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
             scheduler.WaitSubmitted();
         if (display.fg_color.Ensure(instance,g.output_width,g.output_height,vk::Format::eR8G8B8A8Unorm) &&
             display.fg_depth.Ensure(instance,g.render_width,g.render_height,vk::Format::eR32Sfloat) &&
-            display.fg_motion.Ensure(instance,g.render_width,g.render_height,vk::Format::eR16G16Sfloat)) {
+            display.fg_motion.Ensure(instance,g.render_width,g.render_height,vk::Format::eR16G16Sfloat) &&
+            display.fg_ui.Ensure(instance,g.output_width,g.output_height,vk::Format::eR8G8B8A8Unorm)) {
             const auto cmd=scheduler.CommandBuffer();
             const auto copy=[&](vk::Image source,u32 w,u32 h,FgImage& target) {
                 const vk::ImageMemoryBarrier2 readable{
@@ -2011,6 +2031,7 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
             copy(g.color,g.output_width,g.output_height,display.fg_color);
             copy(g.depth,g.render_width,g.render_height,display.fg_depth);
             copy(g.motion,g.render_width,g.render_height,display.fg_motion);
+            copy(g.ui,g.output_width,g.output_height,display.fg_ui);
             display.guides=g;
             display.guides.color=display.fg_color.image;
             display.guides.color_view=display.fg_color.view;
@@ -2018,6 +2039,8 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
             display.guides.depth_view=display.fg_depth.view;
             display.guides.motion=display.fg_motion.image;
             display.guides.motion_view=display.fg_motion.view;
+            display.guides.ui=display.fg_ui.image;
+            display.guides.ui_view=display.fg_ui.view;
         }
     }
     target = {Mirror(vk::Image(display.image), display.views, view_info.format, {}),
