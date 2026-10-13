@@ -76,6 +76,9 @@ uint64_t RecordingFrameId();
 uint64_t OnFrameBegin();
 void PreInputSample();
 void OnInputSampled();
+/// Diagnostic CPU pad-sample to present-call interval for an explicitly owned
+/// guest flip. Excludes driver queuing, scanout and physical input devices.
+void TraceCpuPresent(uint64_t content_frame_id);
 void OnSimulationEnd();
 
 /// Render Queue Attribution

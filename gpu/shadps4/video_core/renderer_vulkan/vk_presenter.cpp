@@ -6,6 +6,7 @@
 #include "common/io_file.h"
 #include "common/path_util.h"
 #include "common/singleton.h"
+#include "common/thread.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "sdl_window.h"
@@ -930,6 +931,10 @@ void Presenter::CountPresentation(bool real) {
 
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
     u32 count=0;
+    std::int64_t real_deadline = 0;
+    const char* gpu_pacing = std::getenv("BB_FSR_GPU_PACING");
+    const bool pace_after_copy = generation_backend == 1 &&
+        (!gpu_pacing || gpu_pacing[0] != '0');
     if (generation && frame->generation && frame->generation->serial && !is_reusing_frame) {
         auto& resources=*frame->generation;
         // This completes evaluation even for a failed/reset recording. No host
@@ -959,6 +964,14 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                 if (const char* setting=std::getenv("BB_FPS")) cap=std::atoi(setting);
             }
             generation_schedule.observe(source_ns,ready_ns,resources.serial,now,frame_ms,cap);
+            if (std::getenv("BB_FG_TRACE")) {
+                std::printf("FG ready: serial=%llu host_ns=%lld source_ns=%llu ready_ns=%llu period_ns=%lld first_ns=%lld real_ns=%lld count=%u\n",
+                    (unsigned long long)resources.serial,(long long)now,
+                    (unsigned long long)source_ns,(unsigned long long)ready_ns,
+                    (long long)generation_schedule.period(),
+                    (long long)generation_schedule.deadline(1,count+1),
+                    (long long)generation_schedule.deadline(count+1,count+1),count);
+            }
             if (std::getenv("BB_FG_TIMING") && resources.serial % 30 == 0) {
                 std::printf("FG phase: serial=%llu period_ms=%.3f evaluation_ms=%.3f first_lag_ms=%.3f real_lag_ms=%.3f\n",
                     (unsigned long long)resources.serial,generation_schedule.period()/1e6,
@@ -975,23 +988,26 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                 if (position>count) break;
                 const auto deadline=generation_schedule.deadline(position,count+1);
                 const auto delay=deadline-FgNow();
-                if (delay>0) std::this_thread::sleep_for(std::chrono::nanoseconds(delay));
+                if (!pace_after_copy && delay>0) std::this_thread::sleep_for(std::chrono::nanoseconds(delay));
                 // One fence owns every use of this leased frame. Before resetting
                 // it for another subframe, the previous submission must finish.
                 Check(instance.GetDevice().waitForFences(frame->present_done,true,
                     std::numeric_limits<u64>::max()));
-                if (!PresentOne(frame,resources.presented[position-1].image,false)) break;
+                if (!PresentOne(frame,resources.presented[position-1].image,false,
+                    pace_after_copy ? deadline : 0)) break;
                 ++position;
             }
-            const auto delay=generation_schedule.deadline(count+1,count+1)-FgNow();
-            if (delay>0) std::this_thread::sleep_for(std::chrono::nanoseconds(delay));
+            real_deadline = generation_schedule.deadline(count+1,count+1);
+            const auto delay=real_deadline-FgNow();
+            if (!pace_after_copy && delay>0) std::this_thread::sleep_for(std::chrono::nanoseconds(delay));
         }
     }
     // Ordinary frames, loading screens, unsupported/failed providers and expired
     // subframes all preserve this real endpoint and the original game flip.
     Check(instance.GetDevice().waitForFences(frame->present_done,true,
         std::numeric_limits<u64>::max()));
-    PresentOne(frame,frame->image,!is_reusing_frame && is_game_frame);
+    PresentOne(frame,frame->image,!is_reusing_frame && is_game_frame,
+        pace_after_copy ? real_deadline : 0);
     if (!is_reusing_frame) {
         last_submit_frame=frame;
         std::scoped_lock lock{free_mutex};
@@ -1001,7 +1017,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     if (!is_reusing_frame && is_game_frame) DebugState.IncFlipFrameNum();
 }
 
-bool Presenter::PresentOne(Frame* frame, vk::Image source_image, bool real) {
+bool Presenter::PresentOne(Frame* frame, vk::Image source_image, bool real, std::int64_t deadline) {
+    const bool trace = std::getenv("BB_FG_TRACE") != nullptr;
+    const auto trace_begin = trace ? FgNow() : 0;
     // bbport: a minimized window has no pixels on Windows (0x0); keep the swapchain and skip
     // presenting until the window is restored.
     if (window.GetWidth() == 0 || window.GetHeight() == 0) {
@@ -1149,7 +1167,18 @@ bool Presenter::PresentOne(Frame* frame, vk::Image source_image, bool real) {
     info.AddSignal(frame->present_done);
     scheduler.Flush(info);
 
+    // FSR's composition copy must be complete before its paced present. A CPU
+    // deadline alone cannot prevent a copy queued behind the next source frame
+    // from reaching the display late and creating a short/long pair.
+    if (deadline) {
+        Check(instance.GetDevice().waitForFences(frame->present_done,true,
+            std::numeric_limits<u64>::max()));
+        Common::PreciseSleepUntil(std::chrono::steady_clock::time_point(
+            std::chrono::nanoseconds(deadline)));
+    }
+
     // Present to swapchain.
+    if (real) Reflex::TraceCpuPresent(frame->content_frame_id);
     Reflex::OnPresentBegin(frame->reflex_frame_id,real);
     {
         std::scoped_lock submit_lock{Scheduler::submit_mutex};
@@ -1159,6 +1188,12 @@ bool Presenter::PresentOne(Frame* frame, vk::Image source_image, bool real) {
     }
 
     Reflex::OnPresentEnd(frame->reflex_frame_id, real);
+    if (trace) {
+        std::printf("FG present: serial=%llu id=%llu real=%u begin_ns=%lld end_ns=%lld\n",
+            (unsigned long long)(frame->generation ? frame->generation->serial : 0),
+            (unsigned long long)frame->reflex_frame_id,unsigned(real),
+            (long long)trace_begin,(long long)FgNow());
+    }
     if (real && std::getenv("BB_REFLEX_TIMING")) {
         Reflex::LatencyReport r{};
         if (Reflex::QueryLatencyTimings(&r) && r.present_id>last_reflex_report) {

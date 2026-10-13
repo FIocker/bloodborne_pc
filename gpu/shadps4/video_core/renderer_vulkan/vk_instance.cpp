@@ -15,6 +15,7 @@
 #include "video_core/renderer_vulkan/vk_reflex.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
+#include "bbport_settings.h"
 
 #include <vk_mem_alloc.h>
 
@@ -410,10 +411,20 @@ bool Instance::CreateDevice() {
         return false;
     }
 
-    static constexpr std::array queue_priorities = {1.0f};
+    // An independent queue lets time-sensitive FSR presentation copies bypass
+    // the following source frame's draw work. Both queues belong to the same
+    // family, so leased images keep their existing ownership rules.
+    const char* fsr_present_queue = std::getenv("BB_FSR_PRESENT_QUEUE");
+    const auto& startup = BbSettings::Get();
+    const bool fsr_generation = startup.startup_frame_generation >= 2 &&
+        startup.startup_fg_backend == BbSettings::FgFsr;
+    const bool separate_present = fsr_generation &&
+        (!fsr_present_queue || fsr_present_queue[0] != '0') &&
+        family_properties[queue_family_index].queueCount >= 2;
+    static constexpr std::array queue_priorities = {1.0f, 1.0f};
     const vk::DeviceQueueCreateInfo queue_info = {
         .queueFamilyIndex = queue_family_index,
-        .queueCount = static_cast<u32>(queue_priorities.size()),
+        .queueCount = separate_present ? 2u : 1u,
         .pQueuePriorities = queue_priorities.data(),
     };
 
@@ -695,7 +706,8 @@ bool Instance::CreateDevice() {
     Reflex::Initialize(*instance, physical_device, *device, reflex_supported);
 
     graphics_queue = device->getQueue(queue_family_index, 0);
-    present_queue = device->getQueue(queue_family_index, 0);
+    present_queue = device->getQueue(queue_family_index, separate_present ? 1 : 0);
+    std::printf("Presentation queue: %s\n",separate_present ? "independent" : "shared");
     if (reflex_supported && present_queue && present_queue != graphics_queue) {
         Reflex::OnPresentQueueCreated(present_queue);
     }

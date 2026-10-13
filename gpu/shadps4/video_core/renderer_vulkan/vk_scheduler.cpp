@@ -433,7 +433,9 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
 
     static constexpr std::array<vk::PipelineStageFlags, 2> wait_stage_masks = {
         vk::PipelineStageFlagBits::eAllCommands,
-        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        // Presentation reads source images at the transfer stage. Waiting only
+        // at color attachment output is too late on an independent queue.
+        vk::PipelineStageFlagBits::eAllCommands,
     };
 
     const vk::TimelineSemaphoreSubmitInfo timeline_si = {
@@ -456,10 +458,11 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         .pSignalSemaphores = info.signal_semas.data(),
     };
 
+    const auto queue = is_out_of_band ? instance.GetPresentQueue() : instance.GetGraphicsQueue();
     if (submit_reflex_id && instance.IsReflexSupported()) {
         // Presentation blits share the graphics queue. Their regular frame ID
         // would replace game-render attribution with a tiny copy submission.
-        const auto attributed = Reflex::PrepareSubmit(instance.GetGraphicsQueue(),
+        const auto attributed = Reflex::PrepareSubmit(queue,
             is_out_of_band ? 0 : submit_reflex_id, submit_info, attribution);
         if (!is_out_of_band) submit_reflex_id = attributed;
         if (is_out_of_band) {
@@ -470,7 +473,7 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     }
 
     ImGui::Core::TextureManager::Submit();
-    auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+    auto submit_result = queue.submit(submit_info, info.fence);
 
     if (submit_reflex_id && instance.IsReflexSupported()) {
         if (is_out_of_band) {

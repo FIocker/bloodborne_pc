@@ -29,6 +29,19 @@ FSR supports Off/2x; selecting FSR clamps a higher multiplier to 2x. Unsupported
 
 - `BB_FG_TIMING=1`: logs observed source and presentation rates, generated presentations and skipped slots. Presentation calls are not proof of displayed scanout cadence; compare with PresentMon when GPU testing is permitted.
 - `BB_REFLEX_TIMING=1`: logs available driver latency reports. These are not input-to-photon measurements.
+- `BB_REFLEX_TIMING=1` also logs `reflex cpu` intervals from the first pad sample
+  of a guest simulation cycle to its real-frame present call. The guest's flip
+  request carries this identity through GPU and presentation workers. This
+  driver-independent interval excludes OS input delivery, driver queuing,
+  scanout and panel response; it is not physical input-to-photon latency.
+- `BB_FG_TRACE=1`: logs per-source GPU completion, deadlines and present-call
+  spans. Keep detailed tracing off during ordinary play.
+- FSR generation uses a second graphics queue in the same family when available.
+  Its composition copies complete before precise CPU presentation deadlines.
+  `BB_FSR_PRESENT_QUEUE=0` disables the independent queue for diagnostics;
+  `BB_FSR_GPU_PACING=0` disables pacing after copy completion. Both improvements
+  are on by default for FSR generation. DLSS and ordinary presentation keep
+  their existing queue and pacing path.
 - `BB_FG_CAPTURE_DIR=<folder>`: captures one generated frame once its rendered serial reaches `BB_FG_CAPTURE_FRAME` (default 120). Files are written in `frame_<serial>` after the draw timeline completes. Readback can affect performance; keep it off during pacing measurements.
 
 Captures contain `depth.bin` (R32 hardware depth in 0..1), `motion.bin` (RG16 current-to-previous motion in render pixels), scene/UI/display snapshots, generated images and `guides_manifest.json`. `ui_rgba8.raw` captures UI before the final display shader, in the same encoding as the HUDless scene. `presented_N.raw` and `presented_real.raw` contain the fitted images after post processing. The manifest identifies render/output/presentation sizes and formats, frame IDs, jitter and camera parameters. Use its format fields when decoding raw channel order.

@@ -161,6 +161,26 @@ class AnalyzePresentmonTests(unittest.TestCase):
 
 
 class AnalyzeReflexTests(unittest.TestCase):
+    def test_cpu_owned_latency_uses_clock_units_and_unique_frame_ids(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("reflex_analysis", TOOLS_WIN / "analyze_reflex.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        # The printed decimal is informational: compute from nanosecond clocks,
+        # deduplicate IDs, reject negative intervals and trim by present time.
+        text = "\n".join([
+            "reflex cpu: id=1 sampled_ns=1000000000 present_ns=1040000000 latency_ms=999.000",
+            "reflex cpu: id=1 sampled_ns=1000000000 present_ns=1040000000 latency_ms=999.000",
+            "reflex cpu: id=2 sampled_ns=2000000000 present_ns=2030000000 latency_ms=30.000",
+            "reflex cpu: id=3 sampled_ns=3000000000 present_ns=2990000000 latency_ms=0.000",
+        ])
+        all_rows = module.summarize(text, 0)
+        self.assertEqual(all_rows["cpu_owned_frames"], 2)
+        self.assertEqual(all_rows["cpu_input_to_present_ms"]["p99"], 40)
+        tail = module.summarize(text, 1)
+        self.assertEqual(tail["cpu_owned_frames"], 1)
+        self.assertEqual(tail["cpu_input_to_present_ms"]["p50"], 30)
+
     def test_valid_reflex_timing_log_parsing(self):
         lines = []
         for i in range(1, 20):

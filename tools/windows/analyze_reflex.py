@@ -9,6 +9,9 @@ PATTERN = re.compile(
     r"reflex timing: id=(\d+) input=(\d+) sim=(\d+)\.\.(\d+) "
     r"render=(\d+)\.\.(\d+) present=(\d+)\.\.(\d+) gpu=(\d+)\.\.(\d+)"
 )
+CPU_PATTERN = re.compile(
+    r"reflex cpu: id=(\d+) sampled_ns=(\d+) present_ns=(\d+) latency_ms=([\d.]+)"
+)
 
 
 def summarize(text, tail_seconds=39):
@@ -44,9 +47,20 @@ def summarize(text, tail_seconds=39):
         return {f"p{p}": round(values[round((len(values) - 1) * p / 100)], 3)
                 for p in (50, 95, 99)}
 
+    cpu_rows = {int(fid): (int(sample), int(present))
+                for fid, sample, present, _ in CPU_PATTERN.findall(text)}
+    if cpu_rows and tail_seconds:
+        threshold = max(present for _, present in cpu_rows.values()) - tail_seconds * 1e9
+        cpu_rows = {fid: row for fid, row in cpu_rows.items() if row[1] >= threshold}
+    cpu_values = [(present - sample) / 1e6 for sample, present in cpu_rows.values()
+                  if sample > 0 and present >= sample]
+
     return {"frames": len(rows), "invalid_reports": invalid,
             "missing_or_invalid_input": missing_input,
-            **{k: percentiles(v) for k, v in metrics.items()}}
+            **{k: percentiles(v) for k, v in metrics.items()},
+            "cpu_owned_frames": len(cpu_values),
+            "cpu_input_to_present_ms": percentiles(cpu_values),
+            "gpu_windows_under_0_1_ms": sum(v < .1 for v in metrics["gpu_work_ms"])}
 
 
 if __name__ == "__main__":

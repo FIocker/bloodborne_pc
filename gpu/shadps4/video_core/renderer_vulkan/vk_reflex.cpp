@@ -4,10 +4,12 @@
 #include "video_core/renderer_vulkan/vk_reflex.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -45,6 +47,8 @@ std::unordered_map<VkQueue, uint64_t> g_queue_ids;
 uint64_t g_render_started = 0;
 uint64_t g_report_logged = 0;
 uint64_t g_input_sampled = 0;
+struct CpuSample { uint64_t id{}; int64_t ns{}; };
+std::array<CpuSample,512> g_cpu_samples{};
 
 std::mutex g_mu;
 std::mutex g_sleep_mu; // serializes sleeps and swapchain/semaphore destruction
@@ -395,7 +399,27 @@ void OnInputSampled() {
     std::lock_guard<std::mutex> lk(g_mu);
     if (fid <= g_input_sampled) return;
     g_input_sampled = fid;
+    if (std::getenv("BB_REFLEX_TIMING")) {
+        g_cpu_samples[fid % g_cpu_samples.size()] = {fid,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count()};
+    }
     emit_marker_locked(fid, VK_LATENCY_MARKER_INPUT_SAMPLE_NV);
+}
+
+void TraceCpuPresent(uint64_t fid) {
+    if (!fid || !std::getenv("BB_REFLEX_TIMING")) return;
+    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    CpuSample sample;
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        sample = g_cpu_samples[fid % g_cpu_samples.size()];
+    }
+    if (sample.id == fid && now >= sample.ns) {
+        std::printf("reflex cpu: id=%llu sampled_ns=%lld present_ns=%lld latency_ms=%.3f\n",
+            (unsigned long long)fid,(long long)sample.ns,(long long)now,(now-sample.ns)/1e6);
+    }
 }
 
 void OnSimulationEnd() {

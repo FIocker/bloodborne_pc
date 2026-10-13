@@ -43,6 +43,7 @@ struct Frame {
     u8 id{};
     std::shared_ptr<FgFrameResources> generation;
     u64 reflex_frame_id{};
+    u64 content_frame_id{}; ///< Guest flip identity for driver-independent latency diagnostics.
     VAddr guest_address{};
 
 };
@@ -116,7 +117,7 @@ private:
     void SetExpectedGameSize(s32 width, s32 height);
     void PrepareGeneration(Frame* frame, vk::Image full_color, vk::ImageLayout layout,
                            u32 width, u32 height, vk::Format sample_format, vk::Format source_format);
-    bool PresentOne(Frame* frame, vk::Image image, bool real);
+    bool PresentOne(Frame* frame, vk::Image image, bool real, std::int64_t deadline = 0);
     void CountPresentation(bool real);
 
 private:

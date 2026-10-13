@@ -60,6 +60,7 @@ fi
 cp run.py LICENSE README.md packaging/windows/README-Windows.txt "$dest/"
 if [[ -f docs/FG_REFLEX.md ]]; then
     mkdir -p "$dest/docs" && cp docs/FG_REFLEX.md "$dest/docs/"
+    if [[ -f docs/GPU_VALIDATION.md ]]; then cp docs/GPU_VALIDATION.md "$dest/docs/"; fi
 fi
 if [[ -d fsr4_shaders ]]; then cp -r fsr4_shaders "$dest/"; fi
 # DLSS (NVIDIA RTX): the MSVC-built bridge and NVIDIA's runtimes (SR + Frame Generation dlssg),
