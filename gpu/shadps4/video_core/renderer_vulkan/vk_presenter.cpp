@@ -188,6 +188,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     pp_pass.Create(device, swapchain.GetSurfaceFormat().format);
     BbOverlay::Init(instance, swapchain.GetSurfaceFormat().format, num_images);
     present_scheduler.SetOutOfBand(true);
+    present_scheduler.SetPresentQueue(true);
     flip_scheduler.SetOutOfBand(true);
 
     generation_factor = BbSettings::Get().startup_frame_generation;

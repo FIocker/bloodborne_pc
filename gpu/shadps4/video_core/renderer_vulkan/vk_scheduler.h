@@ -712,6 +712,11 @@ public:
     void SetOutOfBand(bool oob) {
         is_out_of_band = oob;
     }
+    // Latency attribution and queue routing are separate: CPU flip preparation
+    // remains ordered with game draws even when its markers are out of band.
+    void SetPresentQueue(bool use_present) {
+        use_present_queue = use_present;
+    }
     [[nodiscard]] bool IsOutOfBand() const noexcept {
         return is_out_of_band;
     }
@@ -917,6 +922,7 @@ private:
     vk::CommandBuffer current_cmdbuf;
     u64 recording_frame_id = 0;
     bool is_out_of_band = false;
+    bool use_present_queue = false;
     std::condition_variable_any event_cv;
     struct PendingOp {
         Common::UniqueFunction<void> callback;

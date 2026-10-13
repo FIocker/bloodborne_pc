@@ -458,7 +458,7 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         .pSignalSemaphores = info.signal_semas.data(),
     };
 
-    const auto queue = is_out_of_band ? instance.GetPresentQueue() : instance.GetGraphicsQueue();
+    const auto queue = use_present_queue ? instance.GetPresentQueue() : instance.GetGraphicsQueue();
     if (submit_reflex_id && instance.IsReflexSupported()) {
         // Presentation blits share the graphics queue. Their regular frame ID
         // would replace game-render attribution with a tiny copy submission.
