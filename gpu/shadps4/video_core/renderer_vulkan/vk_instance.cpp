@@ -237,7 +237,8 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR,
         vk::PhysicalDeviceImage2DViewOf3DFeaturesEXT, vk::PhysicalDeviceShaderClockFeaturesKHR,
         vk::PhysicalDeviceComputeShaderDerivativesFeaturesKHR,
-        vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE>();
+        vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE,
+        vk::PhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT>();
     features = feature_chain.get().features;
 
     const vk::StructureChain properties_chain = physical_device.getProperties2<
@@ -303,6 +304,23 @@ bool Instance::CreateDevice() {
         }
     }
     depth_range_unrestricted = add_extension(VK_EXT_DEPTH_RANGE_UNRESTRICTED_EXTENSION_NAME);
+    // bbport: the guest binds unused MRT slots as VK_NULL_HANDLE while the pipeline still
+    // declares the real format. Enabling this feature makes that legal instead of VUID
+    // -vkCmdDraw-dynamicRenderingUnusedAttachments-08912, without trimming attachments.
+    dynamic_rendering_unused_attachments =
+        add_extension(VK_EXT_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_EXTENSION_NAME);
+    if (dynamic_rendering_unused_attachments) {
+        dynamic_rendering_unused_attachments_features =
+            feature_chain.get<vk::PhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT>();
+        if (!dynamic_rendering_unused_attachments_features.dynamicRenderingUnusedAttachments) {
+            // The extension is present but the feature is not; do not request the extension.
+            enabled_extensions.pop_back();
+            dynamic_rendering_unused_attachments = false;
+        } else {
+            LOG_INFO(Render_Vulkan, "- dynamicRenderingUnusedAttachments: {}",
+                     dynamic_rendering_unused_attachments_features.dynamicRenderingUnusedAttachments);
+        }
+    }
     dynamic_state_3 = add_extension(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
     if (dynamic_state_3) {
         dynamic_state_3_features =
@@ -611,6 +629,10 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE{
             .shaderMixedFloatDotProductFloat16AccFloat32 = true,
         },
+        vk::PhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT{
+            .dynamicRenderingUnusedAttachments =
+                dynamic_rendering_unused_attachments_features.dynamicRenderingUnusedAttachments,
+        },
         vk::PhysicalDevicePresentIdFeaturesKHR{
             .presentId = reflex_supported,
         },
@@ -670,6 +692,9 @@ bool Instance::CreateDevice() {
     }
     if (!mixed_float_dot_product) {
         device_chain.unlink<vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE>();
+    }
+    if (!dynamic_rendering_unused_attachments) {
+        device_chain.unlink<vk::PhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT>();
     }
     if (!reflex_supported) {
         device_chain.unlink<vk::PhysicalDevicePresentIdFeaturesKHR>();

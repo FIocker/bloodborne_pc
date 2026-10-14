@@ -143,6 +143,15 @@ public:
         return maintenance_8;
     }
 
+    /// Returns true if VK_EXT_dynamic_rendering_unused_attachments is supported and enabled.
+    /// Allows a pipeline VkPipelineRenderingCreateInfo::pColorAttachmentFormats entry to be a
+    /// real format while the matching VkRenderingInfo::pColorAttachments imageView is
+    /// VK_NULL_HANDLE (and the reverse), which is what the guest does for unused MRT slots.
+    bool IsDynamicRenderingUnusedAttachmentsSupported() const {
+        return dynamic_rendering_unused_attachments &&
+               dynamic_rendering_unused_attachments_features.dynamicRenderingUnusedAttachments;
+    }
+
     bool IsReflexSupported() const {
         return reflex_supported;
     }
@@ -545,6 +554,8 @@ private:
     vk::PhysicalDevicePrimitiveTopologyListRestartFeaturesEXT list_restart_features;
     vk::PhysicalDeviceShaderClockFeaturesKHR shader_clock_features;
     vk::PhysicalDeviceComputeShaderDerivativesFeaturesKHR compute_shader_derivatives_features;
+    vk::PhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT
+        dynamic_rendering_unused_attachments_features;
     vk::DriverIdKHR driver_id;
     vk::UniqueDebugUtilsMessengerEXT debug_callback{};
     std::string vendor_name;
@@ -578,6 +589,7 @@ private:
     bool maintenance_5{};
     bool maintenance_8{};
     bool attachment_feedback_loop{};
+    bool dynamic_rendering_unused_attachments{};
     bool image_2d_view_of_3d{};
     bool image_view_min_lod{};
     bool shader_clock{};
