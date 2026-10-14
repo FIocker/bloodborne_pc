@@ -14,6 +14,7 @@
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_reflex.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
 // DejaVu Sans (Cyrillic), embedded (third_party/fonts, Bitstream Vera license).
@@ -787,7 +788,14 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     {
         // Font atlas uploads submit to the graphics queue themselves.
         std::scoped_lock submit_lock{Vulkan::Scheduler::submit_mutex};
+        const auto frame_id = Vulkan::Reflex::RecordingFrameId();
+        if (Vulkan::Reflex::UsesMarkerAttribution()) {
+            Vulkan::Reflex::OnForeignSubmitBegin(frame_id);
+        }
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmdbuf);
+        if (Vulkan::Reflex::UsesMarkerAttribution()) {
+            Vulkan::Reflex::OnForeignSubmitEnd(frame_id);
+        }
     }
     cmdbuf.endRendering();
 }

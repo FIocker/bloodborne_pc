@@ -62,6 +62,8 @@ void PrepareSwapchainCreateInfo(vk::SwapchainCreateInfoKHR& create_info,
 void OnSwapchainCreated(vk::SwapchainKHR swapchain);
 void OnSwapchainDestroying(vk::SwapchainKHR old_swapchain);
 void OnPresentQueueCreated(vk::Queue present_queue);
+void OnGraphicsQueueCreated(vk::Queue graphics_queue);
+bool UsesMarkerAttribution();
 
 /// Attaches Reflex present ID attribution to a submission.
 /// Safe to call on any queue; returns the effective frame ID (or 0 if stripped/unsupported).

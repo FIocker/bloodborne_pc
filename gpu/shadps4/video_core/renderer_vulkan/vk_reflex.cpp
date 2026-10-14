@@ -40,6 +40,7 @@ VkPhysicalDevice g_phys = VK_NULL_HANDLE;
 VkDevice g_device = VK_NULL_HANDLE;
 VkSwapchainKHR g_swapchain = VK_NULL_HANDLE;
 VkQueue g_present_queue = VK_NULL_HANDLE;
+bool g_marker_attribution = false;
 
 VkSemaphore g_sleep_semaphore = VK_NULL_HANDLE;
 uint64_t g_sleep_value = 0;
@@ -235,6 +236,7 @@ void Shutdown() {
     g_phys = VK_NULL_HANDLE;
     g_instance = VK_NULL_HANDLE;
     g_supported = false;
+    g_marker_attribution = false;
 }
 
 bool IsSupported() {
@@ -302,10 +304,35 @@ void OnPresentQueueCreated(vk::Queue present_queue) {
     }
 }
 
+void OnGraphicsQueueCreated(vk::Queue graphics_queue) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    // Diagnostic comparison until the hardware matrix verifies marker attribution.
+    const char* option = std::getenv("BB_REFLEX_MARKER_ATTRIBUTION");
+    g_marker_attribution = option && std::strcmp(option, "1") == 0 && g_supported &&
+                           graphics_queue && g_pfn_queue_notify_oob;
+    if (g_marker_attribution) {
+        VkOutOfBandQueueTypeInfoNV info{};
+        info.sType = VK_STRUCTURE_TYPE_OUT_OF_BAND_QUEUE_TYPE_INFO_NV;
+        info.queueType = VK_OUT_OF_BAND_QUEUE_TYPE_RENDER_NV;
+        g_pfn_queue_notify_oob(static_cast<VkQueue>(graphics_queue), &info);
+    }
+    std::printf("Reflex submission attribution: %s\n",
+                g_marker_attribution ? "render markers" : "explicit IDs");
+}
+
+bool UsesMarkerAttribution() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    return g_marker_attribution;
+}
+
 uint64_t PrepareSubmit(vk::Queue queue, uint64_t frame_id, vk::SubmitInfo& submit,
                        VkLatencySubmissionPresentIdNV& attribution) {
     std::lock_guard<std::mutex> lk(g_mu);
     if (!g_supported) return 0;
+    // A shared queue can copy an older presentation after submitting newer source
+    // work. Explicit IDs cannot regress, and zero would inherit another frame.
+    // Render-marker attribution names the captured source without that fallback.
+    if (g_marker_attribution) return frame_id;
     auto raw_queue = static_cast<VkQueue>(queue);
     auto& last = g_queue_ids[raw_queue];
     if (frame_id && frame_id < last) {
@@ -671,11 +698,17 @@ void OnRenderSubmitBegin(uint64_t frame_id) {
         g_render_started = frame_id;
         emit_marker_locked(frame_id, VK_LATENCY_MARKER_RENDERSUBMIT_START_NV);
     }
+    if (g_marker_attribution) {
+        emit_marker_locked(frame_id, VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_START_NV);
+    }
 }
 
 void OnRenderSubmitEnd(uint64_t frame_id) {
     if (!frame_id) return;
     std::lock_guard<std::mutex> lk(g_mu);
+    if (g_marker_attribution) {
+        emit_marker_locked(frame_id, VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_END_NV);
+    }
     emit_marker_locked(frame_id, VK_LATENCY_MARKER_RENDERSUBMIT_END_NV);
 }
 

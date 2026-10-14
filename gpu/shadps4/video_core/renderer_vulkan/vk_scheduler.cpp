@@ -489,7 +489,9 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     };
 
     const auto queue = use_present_queue ? instance.GetPresentQueue() : instance.GetGraphicsQueue();
-    if (submit_reflex_id && instance.IsReflexSupported()) {
+    const bool trace_reflex = submit_reflex_id && instance.IsReflexSupported() &&
+        !(Reflex::UsesMarkerAttribution() && queue != instance.GetGraphicsQueue());
+    if (trace_reflex) {
         // Presentation blits share the graphics queue. Their regular frame ID
         // would replace game-render attribution with a tiny copy submission.
         const auto attributed = Reflex::PrepareSubmit(queue,
@@ -505,7 +507,7 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     ImGui::Core::TextureManager::Submit();
     auto submit_result = queue.submit(submit_info, info.fence);
 
-    if (submit_reflex_id && instance.IsReflexSupported()) {
+    if (trace_reflex && submit_reflex_id) {
         if (is_out_of_band) {
             Reflex::OnForeignSubmitEnd(submit_reflex_id);
         } else {

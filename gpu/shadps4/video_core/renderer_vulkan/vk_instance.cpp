@@ -732,6 +732,7 @@ bool Instance::CreateDevice() {
 
     graphics_queue = device->getQueue(queue_family_index, 0);
     present_queue = device->getQueue(queue_family_index, separate_present ? 1 : 0);
+    if (reflex_supported) Reflex::OnGraphicsQueueCreated(graphics_queue);
     std::printf("Presentation queue: %s\n",separate_present ? "independent" : "shared");
     if (reflex_supported && present_queue && present_queue != graphics_queue) {
         Reflex::OnPresentQueueCreated(present_queue);
