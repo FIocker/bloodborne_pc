@@ -306,9 +306,12 @@ void OnPresentQueueCreated(vk::Queue present_queue) {
 
 void OnGraphicsQueueCreated(vk::Queue graphics_queue) {
     std::lock_guard<std::mutex> lk(g_mu);
-    // Diagnostic comparison until the hardware matrix verifies marker attribution.
+    // Shared presentation copies may belong to an older source than the latest
+    // render submission. Keep their captured identity through render markers;
+    // explicit IDs cannot regress, and clearing them is not exclusion.
+    // Zero retains the former scheme for controlled diagnostic comparisons.
     const char* option = std::getenv("BB_REFLEX_MARKER_ATTRIBUTION");
-    g_marker_attribution = option && std::strcmp(option, "1") == 0 && g_supported &&
+    g_marker_attribution = (!option || std::strcmp(option, "1") == 0) && g_supported &&
                            graphics_queue && g_pfn_queue_notify_oob;
     if (g_marker_attribution) {
         VkOutOfBandQueueTypeInfoNV info{};

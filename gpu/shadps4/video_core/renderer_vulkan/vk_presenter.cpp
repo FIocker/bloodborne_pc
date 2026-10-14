@@ -934,8 +934,10 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     u32 count=0;
     std::int64_t real_deadline = 0;
     const char* gpu_pacing = std::getenv("BB_FSR_GPU_PACING");
-    const bool pace_after_copy = generation_backend == 1 &&
-        (!gpu_pacing || gpu_pacing[0] != '0');
+    const char* dlss_gpu_pacing = std::getenv("BB_DLSS_GPU_PACING");
+    const bool pace_after_copy =
+        (generation_backend == 1 && (!gpu_pacing || gpu_pacing[0] != '0')) ||
+        (generation_backend == 0 && (!dlss_gpu_pacing || dlss_gpu_pacing[0] != '0'));
     if (generation && frame->generation && frame->generation->serial && !is_reusing_frame) {
         auto& resources=*frame->generation;
         // This completes evaluation even for a failed/reset recording. No host
@@ -1183,7 +1185,7 @@ bool Presenter::PresentOne(Frame* frame, vk::Image source_image, bool real, std:
     info.AddSignal(frame->present_done);
     scheduler.Flush(info);
 
-    // FSR's composition copy must be complete before its paced present. A CPU
+    // The composition copy must be complete before its paced present. A CPU
     // deadline alone cannot prevent a copy queued behind the next source frame
     // from reaching the display late and creating a short/long pair.
     if (deadline) {
