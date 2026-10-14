@@ -429,15 +429,19 @@ bool Instance::CreateDevice() {
         return false;
     }
 
-    // An independent queue lets time-sensitive FSR presentation copies bypass
+    // An independent queue lets time-sensitive presentation copies bypass
     // the following source frame's draw work. Both queues belong to the same
     // family, so leased images keep their existing ownership rules.
     const char* fsr_present_queue = std::getenv("BB_FSR_PRESENT_QUEUE");
+    const char* dlss_present_queue = std::getenv("BB_DLSS_PRESENT_QUEUE");
     const auto& startup = BbSettings::Get();
     const bool fsr_generation = startup.startup_frame_generation >= 2 &&
         startup.startup_fg_backend == BbSettings::FgFsr;
-    const bool separate_present = fsr_generation &&
-        (!fsr_present_queue || fsr_present_queue[0] != '0') &&
+    const bool dlss_generation = startup.startup_frame_generation >= 2 &&
+        startup.startup_fg_backend == BbSettings::FgDlss;
+    const bool separate_present =
+        ((fsr_generation && (!fsr_present_queue || fsr_present_queue[0] != '0')) ||
+         (dlss_generation && (!dlss_present_queue || dlss_present_queue[0] != '0'))) &&
         family_properties[queue_family_index].queueCount >= 2;
     static constexpr std::array queue_priorities = {1.0f, 1.0f};
     const vk::DeviceQueueCreateInfo queue_info = {
