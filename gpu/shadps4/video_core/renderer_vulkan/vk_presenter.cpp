@@ -19,6 +19,7 @@
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/texture_cache/image.h"
 #include "bbport_settings.h"
+#include "bbport_threads.h"
 #include "video_core/renderer_vulkan/vk_fg_images.h"
 #include "video_core/renderer_vulkan/vk_reflex.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
@@ -502,7 +503,7 @@ static void CaptureFg(const Instance& instance, Scheduler& scheduler, vk::Comman
 }
 
 Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& attribute,
-                               VAddr cpu_address) {
+                               VAddr cpu_address, u64 content_frame_id) {
     // bbport: BB_FRAME_DUMP_TRIGGER=<file>: when the file exists it is removed and this frame's
     // guest display buffer and presented image are written to BB_DUMP_DIR (default out/dump)
     // as raw 32-bit pixels (menus and movies included; the upscaler dumps scene frames only).
@@ -521,8 +522,18 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
 
     Frame* frame = GetRenderFrame();
     frame->guest_address=cpu_address;
-    frame->reflex_frame_id = Reflex::RecordingFrameId();
-    if (!frame->reflex_frame_id) frame->reflex_frame_id = Reflex::CurrentSimFrameId();
+    // bbport: the accepted flip identity is authoritative (zero at startup is intentional); the
+    // live/thread-local counters remain in use only where no flip has been accepted.
+    frame->reflex_frame_id = content_frame_id;
+    static const bool submit_trace = std::getenv("BB_REFLEX_SUBMIT_TRACE") != nullptr;
+    if (submit_trace) {
+        std::printf("reflex submit trace: phase=entry frame=%u accepted=%llu inherited=%llu "
+                    "recording=%llu stageB=%d tid=%d\n",
+                    frame->id, static_cast<unsigned long long>(content_frame_id),
+                    static_cast<unsigned long long>(Reflex::RecordingFrameId()),
+                    static_cast<unsigned long long>(draw_scheduler.GetFrameId()),
+                    DrawPipe::OnStageB() ? 1 : 0, static_cast<int>(gettid()));
+    }
     if (frame->generation) {
         frame->generation->count = 0;
         frame->generation->serial = 0;
@@ -646,6 +657,17 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         ++frame_dump_index;
     }
 
+    if (submit_trace) {
+        std::printf("reflex submit trace: phase=flush frame=%u accepted=%llu inherited=%llu "
+                    "serial=%llu recording=%llu stageB=%d tid=%d\n",
+                    frame->id, static_cast<unsigned long long>(content_frame_id),
+                    static_cast<unsigned long long>(Reflex::RecordingFrameId()),
+                    static_cast<unsigned long long>(frame->generation ? frame->generation->serial
+                                                                     : 0),
+                    static_cast<unsigned long long>(draw_scheduler.GetFrameId()),
+                    DrawPipe::OnStageB() ? 1 : 0, static_cast<int>(gettid()));
+    }
+
     // Flush frame creation commands.
     frame->ready_semaphore = draw_scheduler.GetWorkSemaphore()->Handle();
     frame->ready_tick = draw_scheduler.CurrentTick();
@@ -674,11 +696,13 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     return frame;
 }
 
-Frame* Presenter::PrepareBlankFrame(bool present_thread) {
+Frame* Presenter::PrepareBlankFrame(bool present_thread, u64 content_frame_id) {
     // Request a free presentation frame.
     Frame* frame = GetRenderFrame();
     if (frame->generation) { frame->generation->count=0; frame->generation->serial=0; }
-    frame->reflex_frame_id=Reflex::CurrentSimFrameId();
+    // The present thread has no accepted flip and keeps the live identity; the flip path carries
+    // the accepted identity explicitly, including zero at startup.
+    frame->reflex_frame_id = present_thread ? Reflex::CurrentSimFrameId() : content_frame_id;
 
     auto& scheduler = present_thread ? present_scheduler : draw_scheduler;
     scheduler.EndRendering();

@@ -351,6 +351,10 @@ uint64_t PrepareSubmit(vk::Queue queue, uint64_t frame_id, vk::SubmitInfo& submi
     // zero changes explicit-attribution state rather than excluding an individual submit.
     if (raw_queue == g_present_queue) return frame_id;
     auto& last = g_queue_ids[raw_queue];
+    if (!frame_id && last && std::getenv("BB_REFLEX_SUBMIT_TRACE")) {
+        std::printf("reflex submit trace: phase=zero-submit previous=%llu\n",
+                    static_cast<unsigned long long>(last));
+    }
     if (frame_id && frame_id < last) {
         static unsigned logs = 0;
         if (logs++ < 8) {

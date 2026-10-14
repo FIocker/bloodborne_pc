@@ -105,10 +105,14 @@ public:
 
     bool IsVideoOutSurface(const AmdGpu::ColorBuffer& color_buffer) const;
 
+    /// bbport: `content_frame_id` is the identity captured when the guest's flip was accepted.
+    /// It becomes the frame's Reflex identity instead of the live/thread-local counter.
     Frame* PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& attribute,
-                        VAddr cpu_address);
+                        VAddr cpu_address, u64 content_frame_id);
 
-    Frame* PrepareBlankFrame(bool present_thread);
+    /// The present thread has no accepted flip and keeps the live identity; the flip path passes
+    /// the accepted identity explicitly, including zero at startup.
+    Frame* PrepareBlankFrame(bool present_thread, u64 content_frame_id = 0);
 
     void Present(Frame* frame, bool is_reusing_frame = false, bool is_game_frame = true);
     Frame* PrepareLastFrame();

@@ -563,12 +563,12 @@ void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_
                                        u64 content_frame_id, u64 flip_ticket) {
     Vulkan::Frame* frame;
     if (index == -1) {
-        frame = presenter->PrepareBlankFrame(false);
+        frame = presenter->PrepareBlankFrame(false, content_frame_id);
     } else {
         const auto& buffer = port->buffer_slots[index];
         ASSERT_MSG(buffer.group_index >= 0, "Trying to flip an unregistered buffer!");
         const auto& group = port->groups[buffer.group_index];
-        frame = presenter->PrepareFrame(group, buffer.address_left);
+        frame = presenter->PrepareFrame(group, buffer.address_left, content_frame_id);
     }
     // Capture identity at the guest's accepted flip request, not from a later
     // global simulation counter on the GPU/presentation worker.
