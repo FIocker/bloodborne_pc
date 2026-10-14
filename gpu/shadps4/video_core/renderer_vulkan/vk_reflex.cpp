@@ -96,6 +96,10 @@ void apply_mode_under_wsi_locked() {
              info.minimumIntervalUs, static_cast<int>(r));
 }
 
+// The specification permits markers concurrently with acquire/present. g_mu serializes
+// our marker state with OnSwapchainDestroying, which clears g_swapchain before destruction.
+// Do not make simulation/render markers wait behind WSI acquisition.
+// https://docs.vulkan.org/refpages/latest/refpages/source/vkSetLatencyMarkerNV.html
 void emit_marker_locked(uint64_t frame_id, VkLatencyMarkerNV marker) {
     if (!g_supported || !g_device || !g_swapchain || !g_pfn_set_marker) return;
     VkSetLatencyMarkerInfoNV info{};
@@ -396,13 +400,17 @@ void PreInputSample() {
 void OnInputSampled() {
     const uint64_t fid = CurrentSimFrameId();
     if (!fid) return;
+    // Timestamp the sample before any marker-state lock contention.
+    const bool timing = std::getenv("BB_REFLEX_TIMING") != nullptr;
+    const auto sampled_ns = timing
+        ? std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now().time_since_epoch()).count()
+        : 0;
     std::lock_guard<std::mutex> lk(g_mu);
     if (fid <= g_input_sampled) return;
     g_input_sampled = fid;
-    if (std::getenv("BB_REFLEX_TIMING")) {
-        g_cpu_samples[fid % g_cpu_samples.size()] = {fid,
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count()};
+    if (timing) {
+        g_cpu_samples[fid % g_cpu_samples.size()] = {fid, sampled_ns};
     }
     emit_marker_locked(fid, VK_LATENCY_MARKER_INPUT_SAMPLE_NV);
 }

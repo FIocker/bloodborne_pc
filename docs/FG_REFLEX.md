@@ -1,6 +1,6 @@
 # Frame generation and Reflex
 
-This Windows build adds DLSS frame generation, FSR frame generation and NVIDIA Reflex to the existing temporal upscalers. It also includes the aspect-ratio and custom-resolution changes from PR #12.
+This Windows build adds DLSS frame generation, FSR frame generation and NVIDIA Reflex to the existing temporal upscalers. Custom resolutions retain centered HUD composition and output-space mouse coordinates.
 
 Choose the generation backend and multiplier in the launcher's Graphics section. The same choices appear in the Insert menu. Generation and Reflex changes are saved for the next game start; reconstruction presets retain their existing behavior. Frame generation defaults to Off.
 
