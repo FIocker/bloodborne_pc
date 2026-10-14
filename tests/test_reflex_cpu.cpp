@@ -548,13 +548,13 @@ int main() {
 
     // 6g. Isolated jitter must not thrash either decision.
     {
-        // A period 1 % slower than the cap is a miss (outside the 0.5 % band) but not a
-        // GPU-limited sample (inside the 1.5 % band), so it must never demote the one-deep gate
+        // A period 2.5 % slower than the cap is a miss (outside the 2 % band) but not a
+        // GPU-limited sample (inside the 3 % band), so it must never demote the one-deep gate
         // no matter how often it repeats.
         CadencePolicy jitter;
         Feed(jitter, 60, CapPeriod(60), 200);
         assert(jitter.CurrentCap() == CadencePolicy::kDepthOne);
-        const std::int64_t slight = PeriodAt(60, 1.01);
+        const std::int64_t slight = PeriodAt(60, 1.025);
         for (int i = 0; i < 500; ++i) {
             assert(jitter.Update(60, slight) == CadencePolicy::kDepthOne);
             assert(jitter.Update(60, CapPeriod(60)) == CadencePolicy::kDepthOne);
@@ -568,10 +568,10 @@ int main() {
             assert(noisy.Update(60, slight) == CadencePolicy::kDepthTwo);
         }
 
-        // The bands are tight but not razor-thin: a period a hair inside 0.5 % keeps
+        // The bands are tight but not razor-thin: a period a hair inside 2 % keeps
         // accumulating, and one a hair outside clears the history instead of demoting.
         const std::int64_t cap_period = CapPeriod(60);
-        const std::int64_t inside = cap_period + cap_period * 5 / 1000;
+        const std::int64_t inside = cap_period + cap_period * CadencePolicy::kCapTolerancePermille / 1000;
         const std::int64_t outside = inside + 1;
 
         CadencePolicy edge;
@@ -633,9 +633,9 @@ int main() {
     // streak cannot wrap its counter, and a long cap-tight run still engages.
     {
         CadencePolicy soak;
-        int seed = 12345;
+        uint32_t seed = 12345;
         auto next = [&seed] {
-            seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+            seed = (seed * 1103515245u + 12345u) & 0x7fffffff;
             return seed;
         };
 
@@ -646,7 +646,7 @@ int main() {
                 switch (next() % 4) {
                 case 0: break;                                // cap-tight
                 case 1: period = PeriodAt(cap, 1.002); break;  // inside the band
-                case 2: period = PeriodAt(cap, 1.01); break;   // miss, not GPU-limited
+                case 2: period = PeriodAt(cap, 1.025); break;   // miss, not GPU-limited
                 default: period = PeriodAt(cap, 1.05); break;  // GPU-limited
                 }
                 const std::uint32_t depth = soak.Update(cap, period);

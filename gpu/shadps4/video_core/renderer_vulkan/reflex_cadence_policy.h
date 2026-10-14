@@ -38,10 +38,10 @@ public:
 
     /// Sustained cap-tight cadence needed before the one-deep gate is engaged (~2 s).
     static constexpr std::int64_t kEngageSustainedNs = 2'000'000'000;
-    /// Tight band around the cap: 0.5 % of the cap period still counts as "hitting the cap".
-    static constexpr std::int64_t kCapTolerancePermille = 5;
-    /// Slower than the cap by this much (1.5 %) is a GPU-limited sample.
-    static constexpr std::int64_t kSlowTolerancePermille = 15;
+    /// Tight band around the cap: 2 % of the cap period still counts as "hitting the cap".
+    static constexpr std::int64_t kCapTolerancePermille = 20;
+    /// Slower than the cap by this much (3 %) is a GPU-limited sample.
+    static constexpr std::int64_t kSlowTolerancePermille = 30;
     /// Consecutive GPU-limited samples that restore the two-deep gate.
     static constexpr std::uint32_t kSlowStreakLimit = 8;
     /// Saturating bound on the slow streak so a long run can never wrap the counter.
