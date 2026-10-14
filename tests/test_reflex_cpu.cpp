@@ -425,6 +425,35 @@ int main() {
         }
     }
 
+    // Render completion can unblock the next sample before paced presentation. The later
+    // endpoint must neither consume another frame's ticket nor resurrect a completed ticket
+    // when the guest registers it late.
+    {
+        auto& backlog = FrameBacklog();
+        backlog.Configure(true, 2);
+        const auto rendered = AllocateFlipTicket();
+        const auto waiting = AllocateFlipTicket();
+        OnFlipAccepted(rendered);
+        OnFlipAccepted(waiting);
+        assert(backlog.Outstanding() == 2);
+        std::atomic<bool> released = false;
+        std::thread input([&] { released = backlog.Gate(1000); });
+        OnSourceReady(rendered);
+        input.join();
+        assert(released && backlog.Outstanding() == 1);
+        OnPresentRetired(rendered);
+        OnFlipAccepted(rendered);
+        assert(backlog.Outstanding() == 1);
+        OnPresentRetired(waiting); // Loading/non-FG fallback still frees the slot.
+        assert(backlog.Outstanding() == 0);
+        const auto late = AllocateFlipTicket();
+        OnSourceReady(late);
+        OnFlipAccepted(late);
+        OnPresentRetired(late);
+        assert(backlog.Outstanding() == 0);
+        backlog.Configure(false, 2);
+    }
+
     // 7. Stubs for present and render markers do not crash when unsupported
     OnRenderSubmitBegin(c_fid_curr);
     OnRenderSubmitEnd(c_fid_curr);

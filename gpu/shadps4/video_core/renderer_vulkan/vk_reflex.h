@@ -92,6 +92,9 @@ uint64_t AllocateFlipTicket();
 void OnFlipAccepted(uint64_t flip_ticket);
 /// Guest flip thread: a queued flip under `flip_ticket` failed and will never be presented.
 void OnFlipCancelled(uint64_t flip_ticket);
+/// Presenter thread: the matching source render/evaluation timeline has completed. Releases
+/// only the input gate ticket; frame resources remain leased until presentation completes.
+void OnSourceReady(uint64_t flip_ticket);
 /// Presenter thread: a real source frame's presentation call returned. Retires the flip that
 /// allocated `flip_ticket` from the bounded backlog, including for minimized, skipped or
 /// loading frames.
@@ -160,12 +163,12 @@ private:
     bool submission_valid = false;
 };
 
-/// Bounded backlog of accepted-but-unpresented source frames.
+/// Bounded backlog of accepted source work before input sampling.
 ///
-/// Bounds the guest's accepted-but-unpresented source frames before input sampling, so the
-/// guest cannot run more than `cap` source frames ahead of presentation. It complements the
-/// vendor latency sleep rather than replacing it: the guest registers a source frame when its
-/// flip is accepted and the presenter retires it when the frame's presentation call returns;
+/// Counts accepted sources until their FG render/evaluation completes, with presentation-time
+/// retirement for ordinary/loading frames. Frame leases independently bound presentation
+/// run-ahead. It complements vendor latency sleep: the guest registers each accepted flip,
+/// and the presenter releases that exact ticket without releasing the frame's GPU resources;
 /// `Gate` blocks the next input sample while the backlog is full.
 ///
 /// Threading: `Register`/`Cancel` run on the guest flip thread, `Retire` on the presenter
@@ -189,7 +192,8 @@ public:
     void Register(uint64_t flip_ticket);
     /// Guest flip thread: the queued flip under `flip_ticket` failed and will never be presented.
     void Cancel(uint64_t flip_ticket);
-    /// Presenter thread: the frame's presentation call returned (including minimized/skipped).
+    /// Presenter thread: source work completed or fallback presentation returned. Idempotent;
+    /// this queue slot is independent of ownership of the frame and its SDK resources.
     void Retire(uint64_t flip_ticket);
 
     /// Guest simulation thread: blocks while `cap` source frames are outstanding. Returns

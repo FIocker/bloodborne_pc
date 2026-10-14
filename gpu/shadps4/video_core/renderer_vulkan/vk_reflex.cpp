@@ -473,6 +473,11 @@ void OnPresentRetired(uint64_t flip_ticket) {
     FrameBacklog().Retire(flip_ticket);
 }
 
+void OnSourceReady(uint64_t flip_ticket) {
+    if (!flip_ticket) return;
+    FrameBacklog().Retire(flip_ticket);
+}
+
 void SetRecordingFrameId(uint64_t frame_id) {
     t_recording_frame_id = frame_id;
 }

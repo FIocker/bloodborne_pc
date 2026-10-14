@@ -941,6 +941,15 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         // This completes evaluation even for a failed/reset recording. No host
         // flag reads or provider resource retirement occur before this wait.
         draw_scheduler.Wait(frame->ready_tick);
+        // The input gate bounds unfinished source work, not the CPU sleeps used to spread
+        // generated images across the display interval. Keep this frame and its SDK lease
+        // alive through every presentation, but let the guest prepare its next source once
+        // this source's render/evaluation work has completed. Holding the ticket until the
+        // real endpoint starves the GPU with a two-source cap under heavier render load.
+        // The ordinary endpoint below is an idempotent fallback for non-FG/loading frames.
+        if (is_game_frame) {
+            Reflex::OnSourceReady(frame->flip_ticket);
+        }
         const auto now=FgNow();
         {
             std::scoped_lock lock{generation_mutex};
