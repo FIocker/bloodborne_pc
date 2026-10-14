@@ -125,7 +125,8 @@ private:
     void SetExpectedGameSize(s32 width, s32 height);
     void PrepareGeneration(Frame* frame, vk::Image full_color, vk::ImageLayout layout,
                            u32 width, u32 height, vk::Format sample_format, vk::Format source_format);
-    bool PresentOne(Frame* frame, vk::Image image, bool real, std::int64_t deadline = 0);
+    bool PresentOne(Frame* frame, vk::Image image, bool real, std::int64_t deadline = 0,
+                    bool grouped_present = false);
     void CountPresentation(bool real);
 
 private:

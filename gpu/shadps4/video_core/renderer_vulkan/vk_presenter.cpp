@@ -956,6 +956,7 @@ void Presenter::CountPresentation(bool real) {
 
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
     u32 count=0;
+    bool grouped_present = false;
     std::int64_t real_deadline = 0;
     const char* gpu_pacing = std::getenv("BB_FSR_GPU_PACING");
     const char* dlss_gpu_pacing = std::getenv("BB_DLSS_GPU_PACING");
@@ -1019,6 +1020,13 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                     (now-generation_schedule.deadline(count+1,count+1))/1e6);
             }
             last_ready_ns=now; last_ready_serial=resources.serial;
+            // One application-rendered frame owns this whole interpolation group. Keep its
+            // ordinary present markers around the logical operation; every physical present
+            // inside the group (including the real endpoint) uses out-of-band markers. Using
+            // an ordinary marker only at the endpoint would reuse an ID already mapped by
+            // the generated presents. See VK_NV_low_latency2 Frame Attribution.
+            Reflex::OnPresentBegin(frame->reflex_frame_id, true);
+            grouped_present = true;
             unsigned position=1;
             while (position<=count) {
                 const auto fresh=generation_schedule.next_position(position,count+1,FgNow());
@@ -1033,7 +1041,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                 Check(instance.GetDevice().waitForFences(frame->present_done,true,
                     std::numeric_limits<u64>::max()));
                 if (!PresentOne(frame,resources.presented[position-1].image,false,
-                    pace_after_copy ? deadline : 0)) break;
+                    pace_after_copy ? deadline : 0, grouped_present)) break;
                 ++position;
             }
             real_deadline = generation_schedule.deadline(count+1,count+1);
@@ -1047,7 +1055,8 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     Check(instance.GetDevice().waitForFences(frame->present_done,true,
         std::numeric_limits<u64>::max()));
     PresentOne(frame,frame->image,!is_reusing_frame && is_game_frame,
-        pace_after_copy ? real_deadline : 0);
+        pace_after_copy ? real_deadline : 0, grouped_present);
+    if (grouped_present) Reflex::OnPresentEnd(frame->reflex_frame_id, true);
     // bbport: every real source frame is retired once this call returns, including a minimized
     // window or a skipped present, so the bounded backlog always frees its slot. Retire by the
     // flip's accepted ticket (not content_frame_id, which the Reflex/latency path owns).
@@ -1063,7 +1072,8 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     if (!is_reusing_frame && is_game_frame) DebugState.IncFlipFrameNum();
 }
 
-bool Presenter::PresentOne(Frame* frame, vk::Image source_image, bool real, std::int64_t deadline) {
+bool Presenter::PresentOne(Frame* frame, vk::Image source_image, bool real, std::int64_t deadline,
+                           bool grouped_present) {
     const bool trace = std::getenv("BB_FG_TRACE") != nullptr;
     const auto trace_begin = trace ? FgNow() : 0;
     // bbport: a minimized window has no pixels on Windows (0x0); keep the swapchain and skip
@@ -1225,7 +1235,7 @@ bool Presenter::PresentOne(Frame* frame, vk::Image source_image, bool real, std:
 
     // Present to swapchain.
     if (real) Reflex::TraceCpuPresent(frame->content_frame_id);
-    Reflex::OnPresentBegin(frame->reflex_frame_id,real);
+    Reflex::OnPresentBegin(frame->reflex_frame_id,real && !grouped_present);
     {
         std::scoped_lock submit_lock{Scheduler::submit_mutex};
         if (!swapchain.Present() && window.GetWidth() != 0 && window.GetHeight() != 0) {
@@ -1233,7 +1243,7 @@ bool Presenter::PresentOne(Frame* frame, vk::Image source_image, bool real, std:
         }
     }
 
-    Reflex::OnPresentEnd(frame->reflex_frame_id, real);
+    Reflex::OnPresentEnd(frame->reflex_frame_id, real && !grouped_present);
     if (trace) {
         std::printf("FG present: serial=%llu id=%llu real=%u begin_ns=%lld end_ns=%lld\n",
             (unsigned long long)(frame->generation ? frame->generation->serial : 0),
