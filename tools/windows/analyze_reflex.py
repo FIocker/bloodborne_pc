@@ -47,19 +47,57 @@ def summarize(text, tail_seconds=39):
         return {f"p{p}": round(values[round((len(values) - 1) * p / 100)], 3)
                 for p in (50, 95, 99)}
 
-    cpu_rows = {int(fid): (int(sample), int(present))
-                for fid, sample, present, _ in CPU_PATTERN.findall(text)}
-    if cpu_rows and tail_seconds:
-        threshold = max(present for _, present in cpu_rows.values()) - tail_seconds * 1e9
-        cpu_rows = {fid: row for fid, row in cpu_rows.items() if row[1] >= threshold}
-    cpu_values = [(present - sample) / 1e6 for sample, present in cpu_rows.values()
-                  if sample > 0 and present >= sample]
+    # A guest input/simulation cycle logs its first pad sample once, but the
+    # present path can run several times per cycle (frame generation, repeated
+    # flips), so one logical id may appear with the same sample and several
+    # presents. Group by (id, sample); collapse exact (id, sample, present)
+    # duplicates that a queried cycle repeats verbatim; then drop records whose
+    # sample or timestamps are invalid before any latency is measured.
+    cpu_cycles = {}
+    for fid, sample, present, _ in CPU_PATTERN.findall(text):
+        cpu_cycles.setdefault((int(fid), int(sample)), set()).add(int(present))
+    # The window is anchored on the newest present timestamp in the log, taken
+    # before invalid records are removed, so trimming matches the raw stream.
+    threshold = None
+    if cpu_cycles and tail_seconds:
+        threshold = max(max(presents) for presents in cpu_cycles.values()) - tail_seconds * 1e9
+
+    first_values = []
+    last_values = []
+    repeated = 0
+    input_cycles = 0
+    for (_, sample), presents in cpu_cycles.items():
+        if sample <= 0:
+            continue
+        valid = [p for p in presents
+                 if p >= sample and (threshold is None or p >= threshold)]
+        if not valid:
+            continue
+        first = min(valid)
+        last = max(valid)
+        input_cycles += 1
+        # The tail window trims individual present timestamps, so a cycle whose
+        # first present falls before the window reports its first in-window
+        # present here. Its last present is unaffected, because the window is
+        # anchored on the newest presented timestamp. Distributions, not
+        # physical input-to-photon latency.
+        first_values.append((first - sample) / 1e6)
+        last_values.append((last - sample) / 1e6)
+        repeated += len(valid) - 1
 
     return {"frames": len(rows), "invalid_reports": invalid,
             "missing_or_invalid_input": missing_input,
             **{k: percentiles(v) for k, v in metrics.items()},
-            "cpu_owned_frames": len(cpu_values),
-            "cpu_input_to_present_ms": percentiles(cpu_values),
+            # cpu_owned_frames and cpu_input_to_present_ms keep the previous
+            # last-present-per-cycle meaning. cpu_first_present_ms and the new
+            # fields describe the same cycles from the input side; the parallel
+            # names make repeats and both ends of the present span explicit.
+            "cpu_owned_frames": len(last_values),
+            "cpu_input_to_present_ms": percentiles(last_values),
+            "cpu_first_present_ms": percentiles(first_values),
+            "cpu_last_present_ms": percentiles(last_values),
+            "cpu_repeated_present_records": repeated,
+            "cpu_input_cycles": input_cycles,
             "gpu_windows_under_0_1_ms": sum(v < .1 for v in metrics["gpu_work_ms"])}
 
 

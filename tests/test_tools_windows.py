@@ -161,11 +161,15 @@ class AnalyzePresentmonTests(unittest.TestCase):
 
 
 class AnalyzeReflexTests(unittest.TestCase):
-    def test_cpu_owned_latency_uses_clock_units_and_unique_frame_ids(self):
+    def load_module(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location("reflex_analysis", TOOLS_WIN / "analyze_reflex.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        return module
+
+    def test_cpu_owned_latency_uses_clock_units_and_unique_frame_ids(self):
+        module = self.load_module()
         # The printed decimal is informational: compute from nanosecond clocks,
         # deduplicate IDs, reject negative intervals and trim by present time.
         text = "\n".join([
@@ -180,6 +184,72 @@ class AnalyzeReflexTests(unittest.TestCase):
         tail = module.summarize(text, 1)
         self.assertEqual(tail["cpu_owned_frames"], 1)
         self.assertEqual(tail["cpu_input_to_present_ms"]["p50"], 30)
+
+    def test_cpu_repeated_presents_expose_first_last_and_repeat_counts(self):
+        module = self.load_module()
+        # One input cycle presents three times at distinct timestamps.
+        text = "\n".join([
+            "reflex cpu: id=7 sampled_ns=1000000000 present_ns=1010000000 latency_ms=10.000",
+            "reflex cpu: id=7 sampled_ns=1000000000 present_ns=1020000000 latency_ms=20.000",
+            "reflex cpu: id=7 sampled_ns=1000000000 present_ns=1030000000 latency_ms=30.000",
+        ])
+        data = module.summarize(text, 0)
+        self.assertEqual(data["cpu_input_cycles"], 1)
+        self.assertEqual(data["cpu_owned_frames"], 1)
+        self.assertEqual(data["cpu_repeated_present_records"], 2)
+        self.assertEqual(data["cpu_first_present_ms"]["p50"], 10)
+        self.assertEqual(data["cpu_last_present_ms"]["p50"], 30)
+        # Backward-compatible field keeps describing the last presentation.
+        self.assertEqual(data["cpu_input_to_present_ms"]["p50"], 30)
+
+    def test_cpu_exact_duplicate_records_dedupe(self):
+        module = self.load_module()
+        # A repeated query of the same cycle must not look like a second present.
+        text = "\n".join([
+            "reflex cpu: id=4 sampled_ns=1000000000 present_ns=1004000000 latency_ms=4.000",
+            "reflex cpu: id=4 sampled_ns=1000000000 present_ns=1004000000 latency_ms=4.000",
+        ])
+        data = module.summarize(text, 0)
+        self.assertEqual(data["cpu_input_cycles"], 1)
+        self.assertEqual(data["cpu_owned_frames"], 1)
+        self.assertEqual(data["cpu_repeated_present_records"], 0)
+        self.assertEqual(data["cpu_first_present_ms"]["p50"], 4)
+        self.assertEqual(data["cpu_last_present_ms"]["p50"], 4)
+
+    def test_cpu_invalid_samples_and_timestamps_excluded(self):
+        module = self.load_module()
+        text = "\n".join([
+            "reflex cpu: id=3 sampled_ns=3000000000 present_ns=2990000000 latency_ms=0.000",
+            "reflex cpu: id=5 sampled_ns=0 present_ns=1000000 latency_ms=1.000",
+            "reflex cpu: id=6 sampled_ns=6000000000 present_ns=6030000000 latency_ms=30.000",
+        ])
+        data = module.summarize(text, 0)
+        # Only the cycle with a valid sample and present>=sample is measured.
+        self.assertEqual(data["cpu_input_cycles"], 1)
+        self.assertEqual(data["cpu_owned_frames"], 1)
+        self.assertEqual(data["cpu_first_present_ms"]["p50"], 30)
+        self.assertEqual(data["cpu_last_present_ms"]["p50"], 30)
+
+    def test_cpu_tail_trims_by_present_time(self):
+        module = self.load_module()
+        # id=9's first present (10 ms) predates the tail window; its later
+        # present anchors the window, so only the in-window present is reported.
+        text = "\n".join([
+            "reflex cpu: id=9 sampled_ns=1000000000 present_ns=1010000000 latency_ms=10.000",
+            "reflex cpu: id=9 sampled_ns=1000000000 present_ns=4000000000 latency_ms=3000.000",
+        ])
+        full = module.summarize(text, 0)
+        self.assertEqual(full["cpu_first_present_ms"]["p50"], 10)
+        self.assertEqual(full["cpu_last_present_ms"]["p50"], 3000)
+        self.assertEqual(full["cpu_repeated_present_records"], 1)
+        tail = module.summarize(text, 2)
+        # Window is [2.0s, 4.0s]: the 10 ms present is trimmed, so the honest
+        # first-present value inside the window is 3000 ms.
+        self.assertEqual(tail["cpu_input_cycles"], 1)
+        self.assertEqual(tail["cpu_owned_frames"], 1)
+        self.assertEqual(tail["cpu_first_present_ms"]["p50"], 3000)
+        self.assertEqual(tail["cpu_last_present_ms"]["p50"], 3000)
+        self.assertEqual(tail["cpu_repeated_present_records"], 0)
 
     def test_valid_reflex_timing_log_parsing(self):
         lines = []
