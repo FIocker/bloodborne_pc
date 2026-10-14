@@ -10,6 +10,7 @@
 
 #include "gpu/bbgpu.h"
 #include "gpu/shim/bbport_settings.h"
+#include "gpu/shadps4/video_core/renderer_vulkan/reflex_cadence_policy.h"
 #include "gpu/shadps4/video_core/renderer_vulkan/vk_reflex.h"
 
 #include "gpu/shim/common/logging/log.h"
@@ -44,6 +45,47 @@ uint64_t bbgpu_reflex_current_sim_frame_id(void) {
     return Vulkan::Reflex::CurrentSimFrameId();
 }
 }
+
+// Adaptive source-queue depth helpers. These only shape observation streams; every
+// expectation below is about the depth the policy selects, never about its internals.
+namespace {
+
+using Vulkan::Reflex::CadencePolicy;
+
+// Period of a source running exactly at `cap` FPS, in nanoseconds, computed the same way the
+// policy derives its own cap period from the selected cap.
+std::int64_t CapPeriod(int cap) {
+    return 1'000'000'000LL / cap;
+}
+
+// `slower` scales the cap period, e.g. 1.05 is a period 5 % slower than the cap.
+std::int64_t PeriodAt(int cap, double slower) {
+    return static_cast<std::int64_t>(static_cast<double>(CapPeriod(cap)) * slower);
+}
+
+// Feeds `count` identical observations and returns the depth selected afterwards.
+std::uint32_t Feed(CadencePolicy& policy, int cap, std::int64_t period_ns, int count) {
+    std::uint32_t depth = policy.CurrentCap();
+    for (int i = 0; i < count; ++i) {
+        depth = policy.Update(cap, period_ns);
+    }
+    return depth;
+}
+
+// Feeds cap-tight observations until the one-deep gate is selected, and returns how many
+// observations that took (including the first, which only latches the cap).
+int TightObservationsToEngage(CadencePolicy& policy, int cap, int limit) {
+    int count = 0;
+    while (count < limit) {
+        ++count;
+        if (policy.Update(cap, CapPeriod(cap)) == CadencePolicy::kDepthOne) {
+            break;
+        }
+    }
+    return count;
+}
+
+} // namespace
 
 int main() {
     using namespace Vulkan::Reflex;
@@ -450,6 +492,238 @@ int main() {
         OnSourceReady(late);
         OnFlipAccepted(late);
         OnPresentRetired(late);
+        assert(backlog.Outstanding() == 0);
+        backlog.Configure(false, 2);
+    }
+
+    // 6f. Adaptive accepted-source queue depth. The policy chooses between a two-deep backlog
+    // gate (slack while the GPU is the limiter) and a one-deep gate (lower guest/CPU queueing
+    // cost while the source reliably hits its selected cap). Every check below is about the
+    // depth that comes out for a given stream of observations.
+    {
+        // Default, and the ~2 s sustained window that earns the one-deep gate. The very first
+        // observation only latches the cap; the transition sample itself is ambiguous.
+        CadencePolicy policy;
+        assert(policy.CurrentCap() == CadencePolicy::kDepthTwo);
+        assert(policy.Update(60, CapPeriod(60)) == CadencePolicy::kDepthTwo);
+
+        const int observations = TightObservationsToEngage(policy, 60, 1000);
+        const std::int64_t elapsed = static_cast<std::int64_t>(observations) * CapPeriod(60);
+        assert(policy.CurrentCap() == CadencePolicy::kDepthOne);
+        assert(elapsed >= CadencePolicy::kEngageSustainedNs);
+        assert(elapsed < CadencePolicy::kEngageSustainedNs + 3 * CapPeriod(60));
+        assert(observations > 100); // dozens of frames are not "sustained"
+
+        // Engagement is measured in time, not samples: 30 and 120 Hz need their own window and
+        // must each be judged against their own period. A tenth of the window is never enough.
+        for (const int cap : {30, 60, 120, 144}) {
+            CadencePolicy per_cap;
+            const int needed = TightObservationsToEngage(per_cap, cap, 2000);
+            const std::int64_t held = static_cast<std::int64_t>(needed) * CapPeriod(cap);
+            assert(per_cap.CurrentCap() == CadencePolicy::kDepthOne);
+            assert(held >= CadencePolicy::kEngageSustainedNs);
+            assert(held < CadencePolicy::kEngageSustainedNs + 3 * CapPeriod(cap));
+
+            CadencePolicy early;
+            Feed(early, cap, CapPeriod(cap), 1);
+            Feed(early, cap, CapPeriod(cap), needed / 10);
+            assert(early.CurrentCap() == CadencePolicy::kDepthTwo);
+        }
+
+        // Eight consecutive GPU-limited periods restore the two-deep gate, and the streak is
+        // genuinely consecutive: one cap-tight period in the middle clears it.
+        const std::int64_t slow60 = PeriodAt(60, 1.05); // 5 % slower than the cap
+        assert(Feed(policy, 60, slow60, 7) == CadencePolicy::kDepthOne);
+        assert(policy.Update(60, CapPeriod(60)) == CadencePolicy::kDepthOne);
+        assert(Feed(policy, 60, slow60, 7) == CadencePolicy::kDepthOne);
+        assert(policy.Update(60, slow60) == CadencePolicy::kDepthTwo);
+        assert(policy.CurrentCap() == CadencePolicy::kDepthTwo);
+
+        // After a demotion the one-deep gate has to be earned again in full.
+        Feed(policy, 60, CapPeriod(60), 100);
+        assert(policy.CurrentCap() == CadencePolicy::kDepthTwo);
+        TightObservationsToEngage(policy, 60, 1000);
+        assert(policy.CurrentCap() == CadencePolicy::kDepthOne);
+    }
+
+    // 6g. Isolated jitter must not thrash either decision.
+    {
+        // A period 1 % slower than the cap is a miss (outside the 0.5 % band) but not a
+        // GPU-limited sample (inside the 1.5 % band), so it must never demote the one-deep gate
+        // no matter how often it repeats.
+        CadencePolicy jitter;
+        Feed(jitter, 60, CapPeriod(60), 200);
+        assert(jitter.CurrentCap() == CadencePolicy::kDepthOne);
+        const std::int64_t slight = PeriodAt(60, 1.01);
+        for (int i = 0; i < 500; ++i) {
+            assert(jitter.Update(60, slight) == CadencePolicy::kDepthOne);
+            assert(jitter.Update(60, CapPeriod(60)) == CadencePolicy::kDepthOne);
+        }
+
+        // Conversely, a stream of interleaved cap-tight and jittery periods can never talk the
+        // policy into one-deep: every miss clears the sustained history first.
+        CadencePolicy noisy;
+        for (int i = 0; i < 2000; ++i) {
+            assert(noisy.Update(60, CapPeriod(60)) == CadencePolicy::kDepthTwo);
+            assert(noisy.Update(60, slight) == CadencePolicy::kDepthTwo);
+        }
+
+        // The bands are tight but not razor-thin: a period a hair inside 0.5 % keeps
+        // accumulating, and one a hair outside clears the history instead of demoting.
+        const std::int64_t cap_period = CapPeriod(60);
+        const std::int64_t inside = cap_period + cap_period * 5 / 1000;
+        const std::int64_t outside = inside + 1;
+
+        CadencePolicy edge;
+        Feed(edge, 60, cap_period, 1);
+        Feed(edge, 60, inside, 121);
+        assert(edge.CurrentCap() == CadencePolicy::kDepthOne);
+
+        CadencePolicy boundary;
+        Feed(boundary, 60, cap_period, 1);
+        Feed(boundary, 60, inside, 100);
+        assert(boundary.CurrentCap() == CadencePolicy::kDepthTwo);
+        assert(boundary.Update(60, outside) == CadencePolicy::kDepthTwo);
+        // The just-outside sample cleared the sustained history: another 119 tight periods
+        // still fall short of the window, which would not be true had they accumulated.
+        Feed(boundary, 60, cap_period, 119);
+        assert(boundary.CurrentCap() == CadencePolicy::kDepthTwo);
+    }
+
+    // 6h. Cap changes, unlimited caps, invalid periods and Reset all fall back to two-deep
+    // immediately and require a fresh window.
+    {
+        CadencePolicy changes;
+        Feed(changes, 60, CapPeriod(60), 200);
+        assert(changes.CurrentCap() == CadencePolicy::kDepthOne);
+
+        // A different cap is an immediate demotion even when the new cap's own period is also
+        // cap-tight: the collected history described the old cap.
+        assert(changes.Update(120, CapPeriod(120)) == CadencePolicy::kDepthTwo);
+        Feed(changes, 120, CapPeriod(120), 400);
+        assert(changes.CurrentCap() == CadencePolicy::kDepthOne);
+        assert(changes.Update(60, CapPeriod(60)) == CadencePolicy::kDepthTwo);
+
+        // Unlimited (0 or negative) is never a basis for adapting.
+        Feed(changes, 60, CapPeriod(60), 200);
+        assert(changes.CurrentCap() == CadencePolicy::kDepthOne);
+        assert(changes.Update(0, CapPeriod(60)) == CadencePolicy::kDepthTwo);
+        assert(changes.Update(-1, CapPeriod(60)) == CadencePolicy::kDepthTwo);
+        assert(changes.CurrentCap() == CadencePolicy::kDepthTwo);
+
+        // Invalid periods (missing measurement, or absurdly long) demote immediately and clear
+        // the sustained history.
+        Feed(changes, 60, CapPeriod(60), 200);
+        assert(changes.CurrentCap() == CadencePolicy::kDepthOne);
+        assert(changes.Update(60, 0) == CadencePolicy::kDepthTwo);
+        assert(changes.Update(60, -1) == CadencePolicy::kDepthTwo);
+        assert(changes.Update(60, CadencePolicy::kMaxPeriodNs + 1) == CadencePolicy::kDepthTwo);
+        Feed(changes, 60, CapPeriod(60), 119);
+        assert(changes.CurrentCap() == CadencePolicy::kDepthTwo);
+        Feed(changes, 60, CapPeriod(60), 3);
+        assert(changes.CurrentCap() == CadencePolicy::kDepthOne);
+
+        // Explicit Reset returns to the default and forgets the latched cap.
+        changes.Reset();
+        assert(changes.CurrentCap() == CadencePolicy::kDepthTwo);
+        assert(changes.Update(60, CapPeriod(60)) == CadencePolicy::kDepthTwo);
+    }
+
+    // 6i. Bounded long run: the depth is always one of the two legal values, a saturated slow
+    // streak cannot wrap its counter, and a long cap-tight run still engages.
+    {
+        CadencePolicy soak;
+        int seed = 12345;
+        auto next = [&seed] {
+            seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+            return seed;
+        };
+
+        for (int cap = 30; cap <= 60; ++cap) {
+            soak.Reset();
+            for (int i = 0; i < 4000; ++i) {
+                std::int64_t period = CapPeriod(cap);
+                switch (next() % 4) {
+                case 0: break;                                // cap-tight
+                case 1: period = PeriodAt(cap, 1.002); break;  // inside the band
+                case 2: period = PeriodAt(cap, 1.01); break;   // miss, not GPU-limited
+                default: period = PeriodAt(cap, 1.05); break;  // GPU-limited
+                }
+                const std::uint32_t depth = soak.Update(cap, period);
+                assert(depth == CadencePolicy::kDepthOne || depth == CadencePolicy::kDepthTwo);
+            }
+            // Whatever the load history, a sustained cap-tight run at this cap must engage.
+            assert(Feed(soak, cap, CapPeriod(cap), 400) == CadencePolicy::kDepthOne);
+        }
+
+        // A very long GPU-limited run saturates the streak without wrapping: the gate stays
+        // two-deep throughout and one tight sample cannot bring one-deep straight back.
+        soak.Reset();
+        Feed(soak, 60, CapPeriod(60), 1);
+        for (int i = 0; i < 100000; ++i) {
+            assert(soak.Update(60, PeriodAt(60, 1.05)) == CadencePolicy::kDepthTwo);
+        }
+        assert(soak.Update(60, CapPeriod(60)) == CadencePolicy::kDepthTwo);
+    }
+
+    // 6j. Adaptive backlog depth. Raising the gate cap must wake a blocked input sample exactly
+    // once for the newly available slot; lowering it must preserve the accepted flips already in
+    // flight (no silent drops) and make the gate wait until the surplus above the new cap has
+    // been retired.
+    {
+        auto& backlog = FrameBacklog();
+        backlog.Configure(true, 1);
+        assert(backlog.Cap() == 1);
+
+        // One accepted flip fills the one-deep gate.
+        const uint64_t first = AllocateFlipTicket();
+        backlog.Register(first);
+        assert(backlog.Outstanding() == 1);
+
+        // A gate blocked on the full one-deep backlog is woken by raising the cap to two.
+        std::atomic<bool> admitted{false};
+        std::thread waiter([&] { admitted = backlog.Gate(2000); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        backlog.SetCap(2);
+        waiter.join();
+        assert(admitted);
+        assert(backlog.Cap() == 2);
+        assert(backlog.Outstanding() == 1);
+
+        // A second accepted flip is admitted under the raised cap.
+        const uint64_t second = AllocateFlipTicket();
+        backlog.Register(second);
+        assert(backlog.Outstanding() == 2);
+
+        // Lowering back to one keeps both flips in flight and blocks the gate until the surplus
+        // above the new cap is retired.
+        backlog.SetCap(1);
+        assert(backlog.Cap() == 1);
+        assert(backlog.Outstanding() == 2);
+
+        std::atomic<bool> finished{false};
+        std::atomic<bool> released{false};
+        std::thread lowered([&] {
+            released = backlog.Gate(2000);
+            finished = true;
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        assert(!finished.load()); // two in flight against a one-deep gate
+        backlog.Retire(first);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        assert(!finished.load()); // one in flight is still not below the cap
+        backlog.Retire(second);
+        lowered.join();
+        assert(finished.load());
+        assert(released);
+        assert(backlog.Outstanding() == 0);
+
+        // A cap change must not disturb the pending set when nothing is blocked.
+        const uint64_t third = AllocateFlipTicket();
+        backlog.Register(third);
+        backlog.SetCap(2);
+        assert(backlog.Outstanding() == 1);
+        backlog.Retire(third);
         assert(backlog.Outstanding() == 0);
         backlog.Configure(false, 2);
     }

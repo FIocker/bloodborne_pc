@@ -2,6 +2,7 @@
 // NVIDIA Reflex (VK_NV_low_latency2 rev3) integration for bbport.
 
 #include "video_core/renderer_vulkan/vk_reflex.h"
+#include "video_core/renderer_vulkan/reflex_cadence_policy.h"
 
 #include <algorithm>
 #include <array>
@@ -56,6 +57,7 @@ std::mutex g_sleep_mu; // serializes sleeps and swapchain/semaphore destruction
 std::mutex g_wsi_mu;   // WSI serialization: acquire/recreate/present
 bool g_supported = false;
 Mode g_mode = Mode::On;
+CadencePolicy g_cadence_policy; // protected by g_mu
 uint32_t g_min_interval_us = 0;
 
 std::atomic<uint64_t> g_sim_frame_id{0};
@@ -86,6 +88,7 @@ void disable_locked(const char* operation, VkResult result) {
 /// Applies the current mode and BB_REFLEX_MAX_QUEUED to the process backlog. Callers must not
 /// hold the sleep, WSI or g_mu lock in a way that blocks the backlog's own mutex ordering.
 void apply_backlog_mode(bool supported, Mode mode) {
+    g_cadence_policy.Reset();
     if (!supported || mode == Mode::Off) {
         FrameBacklog().Configure(false, Backlog::DefaultCap);
         return;
@@ -237,6 +240,10 @@ void Shutdown() {
     g_instance = VK_NULL_HANDLE;
     g_supported = false;
     g_marker_attribution = false;
+    g_present_queue = VK_NULL_HANDLE;
+    g_queue_ids.clear();
+    g_render_started = 0;
+    g_cadence_policy.Reset();
 }
 
 bool IsSupported() {
@@ -304,14 +311,17 @@ void OnPresentQueueCreated(vk::Queue present_queue) {
     }
 }
 
-void OnGraphicsQueueCreated(vk::Queue graphics_queue) {
+void OnGraphicsQueueCreated(vk::Queue graphics_queue, bool independent_presentation) {
     std::lock_guard<std::mutex> lk(g_mu);
     // Shared presentation copies may belong to an older source than the latest
     // render submission. Keep their captured identity through render markers;
     // explicit IDs cannot regress, and clearing them is not exclusion.
-    // Zero retains the former scheme for controlled diagnostic comparisons.
+    // Independent presentation leaves graphics submissions in monotonic source order, so
+    // explicit IDs give the driver accurate GPU work boundaries. Shared queues need markers.
     const char* option = std::getenv("BB_REFLEX_MARKER_ATTRIBUTION");
-    g_marker_attribution = (!option || std::strcmp(option, "1") == 0) && g_supported &&
+    g_queue_ids.clear();
+    g_render_started = 0;
+    g_marker_attribution = (option ? std::strcmp(option, "1") == 0 : !independent_presentation) && g_supported &&
                            graphics_queue && g_pfn_queue_notify_oob;
     if (g_marker_attribution) {
         VkOutOfBandQueueTypeInfoNV info{};
@@ -337,14 +347,17 @@ uint64_t PrepareSubmit(vk::Queue queue, uint64_t frame_id, vk::SubmitInfo& submi
     // Render-marker attribution names the captured source without that fallback.
     if (g_marker_attribution) return frame_id;
     auto raw_queue = static_cast<VkQueue>(queue);
+    // OUT_OF_BAND_PRESENT queues are excluded by the extension. Do not attach zero IDs:
+    // zero changes explicit-attribution state rather than excluding an individual submit.
+    if (raw_queue == g_present_queue) return frame_id;
     auto& last = g_queue_ids[raw_queue];
     if (frame_id && frame_id < last) {
         static unsigned logs = 0;
         if (logs++ < 8) {
-            LOG_WARNING(Render_Vulkan, "Reflex: stale submission ID {} after {}; clearing queue attribution",
+            LOG_WARNING(Render_Vulkan, "Reflex: stale submission ID {} after {}; retaining monotonic queue attribution",
                         frame_id, last);
         }
-        frame_id = 0;
+        frame_id = last;
     }
     if (frame_id) last = frame_id;
     attribution = {};
@@ -380,6 +393,12 @@ void Backlog::Configure(bool enabled_, uint32_t cap_) {
 void Backlog::Clear() {
     std::lock_guard<std::mutex> lk(mutex);
     count = 0;
+    cv.notify_all();
+}
+
+void Backlog::SetCap(uint32_t cap_) {
+    std::lock_guard<std::mutex> lk(mutex);
+    cap = std::clamp(cap_, 1u, MaxCap);
     cv.notify_all();
 }
 
@@ -506,6 +525,22 @@ void OnPresentRetired(uint64_t flip_ticket) {
 void OnSourceReady(uint64_t flip_ticket) {
     if (!flip_ticket) return;
     FrameBacklog().Retire(flip_ticket);
+}
+
+void OnSourceCadence(int target_cap, int64_t period_ns, bool continuous) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    // Explicit diagnostic overrides retain their exact requested limit (including off).
+    if (!g_supported || g_mode == Mode::Off || std::getenv("BB_REFLEX_MAX_QUEUED")) return;
+    if (!continuous) g_cadence_policy.Reset();
+    const auto cap = continuous ? g_cadence_policy.Update(target_cap, period_ns)
+                                : Backlog::DefaultCap;
+    if (FrameBacklog().Cap() != cap) {
+        FrameBacklog().SetCap(cap);
+        if (std::getenv("BB_REFLEX_TIMING")) {
+            std::printf("reflex cadence: cap=%u target=%d period_ns=%lld\n",
+                        cap, target_cap, static_cast<long long>(period_ns));
+        }
+    }
 }
 
 void SetRecordingFrameId(uint64_t frame_id) {

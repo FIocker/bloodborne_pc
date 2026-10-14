@@ -976,6 +976,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                 if (const char* setting=std::getenv("BB_FPS")) cap=std::atoi(setting);
             }
             generation_schedule.observe(source_ns,ready_ns,resources.serial,now,frame_ms,cap);
+            Reflex::OnSourceCadence(cap, generation_schedule.period(),
+                last_ready_serial && resources.serial == last_ready_serial + 1 &&
+                last_ready_ns && now > last_ready_ns && now - last_ready_ns < 500000000);
             if (std::getenv("BB_FG_TRACE")) {
                 std::printf("FG ready: serial=%llu host_ns=%lld source_ns=%llu ready_ns=%llu period_ns=%lld first_ns=%lld real_ns=%lld count=%u\n",
                     (unsigned long long)resources.serial,(long long)now,
@@ -1016,6 +1019,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     }
     // Ordinary frames, loading screens, unsupported/failed providers and expired
     // subframes all preserve this real endpoint and the original game flip.
+    if (!count && !is_reusing_frame) Reflex::OnSourceCadence(0, 0, false);
     Check(instance.GetDevice().waitForFences(frame->present_done,true,
         std::numeric_limits<u64>::max()));
     PresentOne(frame,frame->image,!is_reusing_frame && is_game_frame,

@@ -62,7 +62,7 @@ void PrepareSwapchainCreateInfo(vk::SwapchainCreateInfoKHR& create_info,
 void OnSwapchainCreated(vk::SwapchainKHR swapchain);
 void OnSwapchainDestroying(vk::SwapchainKHR old_swapchain);
 void OnPresentQueueCreated(vk::Queue present_queue);
-void OnGraphicsQueueCreated(vk::Queue graphics_queue);
+void OnGraphicsQueueCreated(vk::Queue graphics_queue, bool independent_presentation);
 bool UsesMarkerAttribution();
 
 /// Attaches Reflex present ID attribution to a submission.
@@ -97,6 +97,8 @@ void OnFlipCancelled(uint64_t flip_ticket);
 /// Presenter thread: the matching source render/evaluation timeline has completed. Releases
 /// only the input gate ticket; frame resources remain leased until presentation completes.
 void OnSourceReady(uint64_t flip_ticket);
+/// Presenter-owned cadence observation; discontinuities restore the two-source limit.
+void OnSourceCadence(int target_cap, int64_t period_ns, bool continuous);
 /// Presenter thread: a real source frame's presentation call returned. Retires the flip that
 /// allocated `flip_ticket` from the bounded backlog, including for minimized, skipped or
 /// loading frames.
@@ -185,6 +187,8 @@ public:
 
     /// Enables or disables the gate. Disabling clears the backlog and wakes waiters.
     void Configure(bool enabled, uint32_t cap);
+    /// Changes capacity without dropping accepted tickets or retirement history.
+    void SetCap(uint32_t cap);
     /// Clears the backlog and wakes waiters (shutdown, unsupported driver, mode off).
     void Clear();
 
