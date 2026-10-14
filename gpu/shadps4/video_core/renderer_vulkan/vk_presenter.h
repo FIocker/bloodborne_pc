@@ -164,6 +164,7 @@ private:
     std::int64_t last_ready_ns{};
     u64 last_ready_serial{};
     u64 last_reflex_report{};
+    std::int64_t last_reflex_query_ns{};
     std::chrono::steady_clock::time_point counter_start{std::chrono::steady_clock::now()};
 };
 

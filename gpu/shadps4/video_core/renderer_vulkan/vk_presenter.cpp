@@ -1213,15 +1213,26 @@ bool Presenter::PresentOne(Frame* frame, vk::Image source_image, bool real, std:
             (long long)trace_begin,(long long)FgNow());
     }
     if (real && std::getenv("BB_REFLEX_TIMING")) {
-        Reflex::LatencyReport r{};
-        if (Reflex::QueryLatencyTimings(&r) && r.present_id>last_reflex_report) {
-            last_reflex_report=r.present_id;
-            std::printf("reflex timing: id=%llu input=%llu sim=%llu..%llu render=%llu..%llu present=%llu..%llu gpu=%llu..%llu\n",
-                (unsigned long long)r.present_id,(unsigned long long)r.input_sample_us,
-                (unsigned long long)r.sim_start_us,(unsigned long long)r.sim_end_us,
-                (unsigned long long)r.render_submit_start_us,(unsigned long long)r.render_submit_end_us,
-                (unsigned long long)r.present_start_us,(unsigned long long)r.present_end_us,
-                (unsigned long long)r.gpu_render_start_us,(unsigned long long)r.gpu_render_end_us);
+        // Driver report queries can disturb presentation under GPU load. CPU
+        // input/present records remain per frame; sample driver reports at 1 Hz
+        // unless an explicitly detailed diagnostic run requests every frame.
+        static const bool full_driver_timing = [] {
+            const char* value = std::getenv("BB_REFLEX_DRIVER_TIMING_FULL");
+            return value && value[0] == '1';
+        }();
+        const auto now = FgNow();
+        if (full_driver_timing || now - last_reflex_query_ns >= 1000000000ll) {
+            last_reflex_query_ns = now;
+            Reflex::LatencyReport r{};
+            if (Reflex::QueryLatencyTimings(&r) && r.present_id>last_reflex_report) {
+                last_reflex_report=r.present_id;
+                std::printf("reflex timing: id=%llu input=%llu sim=%llu..%llu render=%llu..%llu present=%llu..%llu gpu=%llu..%llu\n",
+                    (unsigned long long)r.present_id,(unsigned long long)r.input_sample_us,
+                    (unsigned long long)r.sim_start_us,(unsigned long long)r.sim_end_us,
+                    (unsigned long long)r.render_submit_start_us,(unsigned long long)r.render_submit_end_us,
+                    (unsigned long long)r.present_start_us,(unsigned long long)r.present_end_us,
+                    (unsigned long long)r.gpu_render_start_us,(unsigned long long)r.gpu_render_end_us);
+            }
         }
     }
     CountPresentation(real);
