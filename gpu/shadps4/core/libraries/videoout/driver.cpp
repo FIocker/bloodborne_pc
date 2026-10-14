@@ -534,7 +534,7 @@ void VideoOutDriver::DrawLastFrame() {
 }
 
 bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
-                                bool is_eop, u64 content_frame_id) {
+                                bool is_eop, u64 content_frame_id, u64 flip_ticket) {
     {
         std::unique_lock lock{port->port_mutex};
         if (index != -1 && port->flip_status.flip_pending_num > 16) {
@@ -551,16 +551,16 @@ bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
 
     if (!is_eop) {
         // Non EOP flips can arrive from any thread so ask GPU thread to perform them
-        liverpool->SendCommand([=, this]() { SubmitFlipInternal(port, index, flip_arg, is_eop, content_frame_id); });
+        liverpool->SendCommand([=, this]() { SubmitFlipInternal(port, index, flip_arg, is_eop, content_frame_id, flip_ticket); });
     } else {
-        SubmitFlipInternal(port, index, flip_arg, is_eop, content_frame_id);
+        SubmitFlipInternal(port, index, flip_arg, is_eop, content_frame_id, flip_ticket);
     }
 
     return true;
 }
 
 void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_arg, bool is_eop,
-                                       u64 content_frame_id) {
+                                       u64 content_frame_id, u64 flip_ticket) {
     Vulkan::Frame* frame;
     if (index == -1) {
         frame = presenter->PrepareBlankFrame(false);
@@ -573,6 +573,13 @@ void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_
     // Capture identity at the guest's accepted flip request, not from a later
     // global simulation counter on the GPU/presentation worker.
     frame->content_frame_id = content_frame_id;
+    if (content_frame_id != 0) {
+        frame->reflex_frame_id = content_frame_id;
+    }
+    // bbport: the bounded backlog registers/retires by this accepted-flip ticket, kept separate
+    // from content_frame_id (the Reflex/latency identity). Set unconditionally, including 0, so
+    // a pooled frame can never retire a stale ticket from a previous use.
+    frame->flip_ticket = flip_ticket;
 
     {
         std::scoped_lock lock{mutex};

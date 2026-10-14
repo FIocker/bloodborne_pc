@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -49,6 +51,11 @@ void Swapchain::CreateInternal(u32 width_, u32 height_) {
     DestroyInternal();
 
     SetSurfaceProperties();
+    if (std::getenv("BB_FG_TIMING")) {
+        std::printf("FG surface: window=%ux%u swapchain=%ux%u mode=%s images=%u\n",
+                    width, height, extent.width, extent.height,
+                    vk::to_string(present_mode).c_str(), image_count);
+    }
 
     const std::array queue_family_indices = {
         instance.GetGraphicsQueueFamilyIndex(),

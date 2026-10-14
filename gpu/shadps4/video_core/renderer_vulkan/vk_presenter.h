@@ -44,6 +44,10 @@ struct Frame {
     std::shared_ptr<FgFrameResources> generation;
     u64 reflex_frame_id{};
     u64 content_frame_id{}; ///< Guest flip identity for driver-independent latency diagnostics.
+    /// Monotonic accepted-flip ticket for the bounded backlog. Set by the driver for every
+    /// flip-prepared frame (including 0), so the presenter retires exactly the flip that owns
+    /// this frame; kept separate from content_frame_id, which the Reflex/latency path uses.
+    u64 flip_ticket{};
     VAddr guest_address{};
 
 };

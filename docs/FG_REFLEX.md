@@ -50,6 +50,6 @@ Analyze a capture with `python tools/windows/analyze_fg_guides.py <capture-folde
 
 ## Validation and package
 
-Compilation, CPU regression tests, shader validation and isolated launcher-widget checks are complemented by Windows gameplay tests. See [GPU validation](GPU_VALIDATION.md) for tested conditions and remaining limits. These short runs do not establish long-run memory stability or end-to-end input latency.
+Compilation, CPU regression tests, shader validation and isolated launcher-widget checks are complemented by Windows gameplay tests on a native ultrawide desktop at about 120 Hz. Matched 150 second comparisons show DLSS 2x pacing near 120 displayed FPS through independent flip with a display p99 around 9 ms, and a CPU-owned pad-sample-to-present interval of about 33 ms with Reflex On versus about 48 ms with Reflex Off (about 40 ms with driver-only pacing). A one-hour FSR run and a limited encounter, death and reload gameplay run held private memory and handle counts flat or trending down. These are CPU-side diagnostic intervals and short bounded runs: they do not establish physical input-to-photon latency, multi-hour stability, extended combat, repeated deaths and travel, or variable GPU load. See [GPU validation](GPU_VALIDATION.md) for tested conditions and remaining limits.
 
 The package includes the paired ABI-2 `bbport_dlss.dll`, `nvngx_dlss.dll`, `nvngx_dlssg.dll`, existing FSR assets, diagnostic tools and license notices. NVIDIA SDK terms, original MIT bridge notices and GPL-3.0 notices for adapted bbhost code are retained.

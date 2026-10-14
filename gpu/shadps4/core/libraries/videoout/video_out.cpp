@@ -182,13 +182,21 @@ s32 PS4_SYSV_ABI sceVideoOutSubmitFlip(s32 handle, s32 bufferIndex, s32 flipMode
     LOG_DEBUG(Lib_VideoOut, "bufferIndex = {}, flipMode = {}, flipArg = {}", bufferIndex, flipMode,
               flipArg);
 
-    if (!driver->SubmitFlip(port, bufferIndex, flipArg, false, Vulkan::Reflex::CurrentSimFrameId())) {
+    const u64 content_frame_id = Vulkan::Reflex::CurrentSimFrameId();
+    // bbport: allocate the accepted-flip ticket before the flip is enqueued so a presentation
+    // that completes before we register is matched exactly, not by a high-water mark.
+    const u64 flip_ticket = Vulkan::Reflex::AllocateFlipTicket();
+    if (!driver->SubmitFlip(port, bufferIndex, flipArg, false, content_frame_id, flip_ticket)) {
+        Vulkan::Reflex::OnFlipCancelled(flip_ticket);
         LOG_ERROR(Lib_VideoOut, "Flip queue is full");
         return ORBIS_VIDEO_OUT_ERROR_FLIP_QUEUE_FULL;
     }
 
-    // Only mark simulation end once the flip request is actually accepted
-    Vulkan::Reflex::OnSimulationEnd();
+    // bbport: register the accepted source frame in the bounded backlog before the cycle closes.
+    Vulkan::Reflex::OnFlipAccepted(flip_ticket);
+    // Only mark simulation end once the flip request is actually accepted, closing the cycle
+    // this flip captured (not whichever cycle happens to be open on the flip thread).
+    Vulkan::Reflex::OnSimulationEnd(content_frame_id);
     return ORBIS_OK;
 }
 
@@ -357,7 +365,11 @@ s32 sceVideoOutSubmitEopFlip(s32 handle, u32 buf_id, u32 mode, s64 flip_arg, voi
     }
 
     const u64 content_frame_id = Vulkan::Reflex::CurrentSimFrameId();
-    Vulkan::Reflex::OnSimulationEnd();
+    const u64 flip_ticket = Vulkan::Reflex::AllocateFlipTicket();
+    // bbport: register before closing the cycle; if the queued flip later fails to submit, its
+    // exact ticket is cancelled instead of waiting for the backlog timeout.
+    Vulkan::Reflex::OnFlipAccepted(flip_ticket);
+    Vulkan::Reflex::OnSimulationEnd(content_frame_id);
     Platform::IrqC::Instance()->RegisterOnce(
         Platform::InterruptId::GfxFlip, [=](Platform::InterruptId irq) {
             ASSERT_MSG(irq == Platform::InterruptId::GfxFlip, "An unexpected IRQ occured");
@@ -379,7 +391,10 @@ s32 sceVideoOutSubmitEopFlip(s32 handle, u32 buf_id, u32 mode, s64 flip_arg, voi
                     }
                 }
             }
-            const auto result = driver->SubmitFlip(port, buf_id, flip_arg, true, content_frame_id);
+            const auto result = driver->SubmitFlip(port, buf_id, flip_arg, true, content_frame_id, flip_ticket);
+            if (!result) {
+                Vulkan::Reflex::OnFlipCancelled(flip_ticket);
+            }
             ASSERT_MSG(result, "EOP flip submission failed");
         });
 

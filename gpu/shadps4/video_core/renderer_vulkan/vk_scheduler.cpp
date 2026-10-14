@@ -377,10 +377,39 @@ void Scheduler::PopPendingOperations() {
     }
 }
 
+void Scheduler::SetSubmissionFrameId(u64 frame_id) {
+    // The guest can submit the next source frame's graphics work before the previous source's
+    // flip has been processed (no FIFO ordering is guaranteed across the submit and flip
+    // paths), so the buffer open here can still hold the previous source's unflushed commands.
+    // Submit them under the identity they were recorded with before adopting the new one;
+    // otherwise that work would be attributed to this frame. The caller
+    // (Rasterizer::SetSubmissionFrameId) has already drained the draw-recording thread, so
+    // submitting here cannot race a draw into a submitted buffer.
+    //
+    // Only flush when something was actually recorded into the current buffer. When the natural
+    // PrepareFrame boundary already flushed it, or a submission recorded nothing, an extra
+    // empty submission would overwrite the driver's latency window with tiny work and add
+    // markers for no reason. When the identity is unchanged (several submissions inside one
+    // source frame) there is nothing to split and the buffer keeps accumulating.
+    if (has_recorded_work && recording_id.RecordingId() != frame_id) {
+        Flush();
+    }
+    // Apply immediately: the very next allocation records under the accepted identity, not
+    // the stale one, and every later allocation in this submission reuses it because
+    // AllocateWorkerCommandBuffers no longer clears the captured value.
+    recording_id.BeginSubmission(frame_id);
+    Reflex::SetRecordingFrameId(recording_id.RecordingId());
+}
+
 void Scheduler::AllocateWorkerCommandBuffers() {
-    // Stash the simulation frame ID at recording begin so submissions preserve recording identity
-    recording_frame_id = Reflex::CurrentSimFrameId();
-    Reflex::SetRecordingFrameId(recording_frame_id);
+    // bbport: while a top-level graphics submission owns the recording identity, every
+    // command buffer allocated for it keeps that captured identity. Only a scheduler that
+    // never captured one (presenter blits, compute, initialization) reads the live counter.
+    // The value is deliberately NOT cleared here: clearing it after the first allocation made
+    // later flushes inside the same submission fall back to the late-global counter.
+    recording_id.Allocate(Reflex::CurrentSimFrameId());
+    Reflex::SetRecordingFrameId(recording_id.RecordingId());
+    has_recorded_work = false;
 
     const vk::CommandBufferBeginInfo begin_info = {
         .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
@@ -398,6 +427,7 @@ void Scheduler::AllocateWorkerCommandBuffers() {
         static const auto scope_loc =
             GPU_SCOPE_LOCATION("Guest Frame", MarkersPalette::GpuMarkerColor);
         new (profiler_scope) tracy::VkCtxScope{profiler_ctx, &scope_loc, current_cmdbuf, true};
+        has_recorded_work = true;
     }
 #endif
 }
@@ -446,7 +476,7 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     };
 
     VkLatencySubmissionPresentIdNV attribution{};
-    u64 submit_reflex_id = recording_frame_id;
+    u64 submit_reflex_id = recording_id.RecordingId();
     vk::SubmitInfo submit_info = {
         .pNext = &timeline_si,
         .waitSemaphoreCount = info.num_wait_semas,

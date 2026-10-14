@@ -1009,6 +1009,12 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         std::numeric_limits<u64>::max()));
     PresentOne(frame,frame->image,!is_reusing_frame && is_game_frame,
         pace_after_copy ? real_deadline : 0);
+    // bbport: every real source frame is retired once this call returns, including a minimized
+    // window or a skipped present, so the bounded backlog always frees its slot. Retire by the
+    // flip's accepted ticket (not content_frame_id, which the Reflex/latency path owns).
+    if (!is_reusing_frame && is_game_frame) {
+        Reflex::OnPresentRetired(frame->flip_ticket);
+    }
     if (!is_reusing_frame) {
         last_submit_frame=frame;
         std::scoped_lock lock{free_mutex};

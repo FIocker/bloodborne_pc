@@ -72,8 +72,9 @@ int main() {
     OnInputSampled();
     assert(CurrentSimFrameId() == 1);
 
-    // Ending the simulation cycle (flip consumed) allows the next frame to open
-    OnSimulationEnd();
+    // Ending the simulation cycle (flip consumed) allows the next frame to open. The close
+    // carries the identity captured at flip acceptance.
+    OnSimulationEnd(fid1);
     assert(CurrentSimFrameId() == 1);
 
     // Now next pre-input sample advances to frame 2 (exactly 1 increment)
@@ -86,7 +87,73 @@ int main() {
     assert(CurrentSimFrameId() == 2);
 
     OnInputSampled();
-    OnSimulationEnd();
+    OnSimulationEnd(fid2);
+
+    // 2b. Owned-cycle closure. A close is validated against the cycle that is actually open,
+    // under the cycle gate, before it emits SIMULATION_END or clears the open flag. A stale or
+    // duplicate close must therefore never close a newer cycle the guest has opened since.
+    {
+        // Cycle A opens, is sampled, and is closed by its own captured id.
+        PreInputSample();
+        const uint64_t cycle_a = CurrentSimFrameId();
+        assert(cycle_a == fid2 + 1);
+        OnInputSampled();
+        OnSimulationEnd(cycle_a);
+        assert(CurrentSimFrameId() == cycle_a);
+
+        // A duplicate close of the cycle that just ended is a no-op and must not corrupt the
+        // state: the next pad read still opens exactly one new cycle.
+        OnSimulationEnd(cycle_a);
+
+        // Cycle B opens. A stale close for cycle A must not close or mark cycle B.
+        PreInputSample();
+        const uint64_t cycle_b = CurrentSimFrameId();
+        assert(cycle_b == cycle_a + 1);
+        OnSimulationEnd(cycle_a);
+        // Still open: a pad read inside cycle B must not advance the id.
+        PreInputSample();
+        assert(CurrentSimFrameId() == cycle_b);
+
+        // A close that matches neither the open id nor any closed id is also a no-op.
+        OnSimulationEnd(cycle_b + 7);
+        PreInputSample();
+        assert(CurrentSimFrameId() == cycle_b);
+
+        // A zero id can never close an open cycle.
+        OnSimulationEnd(0);
+        PreInputSample();
+        assert(CurrentSimFrameId() == cycle_b);
+
+        // The owning close ends cycle B; only then does the next pad read advance.
+        OnSimulationEnd(cycle_b);
+        PreInputSample();
+        assert(CurrentSimFrameId() == cycle_b + 1);
+        OnSimulationEnd(CurrentSimFrameId());
+    }
+
+    // 2c. A thread spamming stale/foreign closes must not close the active cycle, must not
+    // corrupt its markers, and must not deadlock against the owning close.
+    {
+        const uint64_t stale_start = CurrentSimFrameId();
+        std::atomic<bool> stop{false};
+        std::thread stale_closer([&] {
+            // Ids that never become the open cycle: a fixed sentinel plus an old id.
+            while (!stop.load(std::memory_order_relaxed)) {
+                OnSimulationEnd(0x5EED);
+                OnSimulationEnd(stale_start);
+            }
+        });
+        constexpr uint64_t kWantedCycles = 300;
+        for (uint64_t i = 0; i < kWantedCycles; ++i) {
+            PreInputSample();
+            const uint64_t fid = CurrentSimFrameId();
+            OnInputSampled();
+            OnSimulationEnd(fid);
+        }
+        stop.store(true, std::memory_order_relaxed);
+        stale_closer.join();
+        assert(CurrentSimFrameId() == stale_start + kWantedCycles);
+    }
 
     // 3. Thread attribution & context tracking
     SetRecordingFrameId(fid2);
@@ -144,6 +211,219 @@ int main() {
     const uint64_t prep_id = PrepareSubmit(nullptr, c_fid_curr, submit, attribution);
     // Unsupported driver path returns 0 and does not corrupt submission
     assert(prep_id == 0);
+
+    // 6b. Recording identity: a submission captured at frame 41 must be applied
+    // immediately and must survive every later allocation of that submission, even while the
+    // live counter the guest has advanced to (42, 43) changes underneath it. A new submission
+    // captured at 44 replaces it. A batch that never captured an identity keeps the live value.
+    {
+        RecordingIdentity id;
+
+        // Nothing captured yet: allocation follows the live counter.
+        assert(id.Allocate(40) == 40);
+        assert(id.RecordingId() == 40);
+
+        // Submission accepted at 41. It must apply immediately, before any allocation.
+        id.BeginSubmission(41);
+        assert(id.RecordingId() == 41);
+        assert(id.HasSubmission() && id.SubmissionId() == 41);
+
+        // Several command buffers are allocated for the same submission while the live
+        // counter advances. Every one of them must stay on 41.
+        assert(id.Allocate(42) == 41);
+        assert(id.Allocate(43) == 41);
+        assert(id.RecordingId() == 41);
+
+        // Next source boundary: a submission captured at 44 applies immediately and persists.
+        id.BeginSubmission(44);
+        assert(id.RecordingId() == 44);
+        assert(id.Allocate(45) == 44);
+        assert(id.Allocate(46) == 44);
+
+        // An explicit owner (presenter) overrides and drops the submission capture.
+        id.SetFrameId(90);
+        assert(id.RecordingId() == 90);
+        assert(!id.HasSubmission());
+        assert(id.Allocate(91) == 91);
+
+        // A captured frame 0 is legitimate and must not fall back to a later live value.
+        id.BeginSubmission(0);
+        assert(id.Allocate(92) == 0);
+        assert(id.Allocate(93) == 0);
+    }
+
+    // The pure resolver keeps its documented meaning.
+    assert(ResolveRecordingFrameId(42, 7, true) == 7);
+    assert(ResolveRecordingFrameId(42, 0, true) == 0);
+    assert(ResolveRecordingFrameId(42, 7, false) == 42);
+
+    // 6c. Bounded guest backlog. The guest may have at most `cap` accepted source frames
+    // outstanding; the presenter retires each one when its present call returns.
+    {
+        Backlog backlog;
+        backlog.Configure(true, 2);
+        assert(backlog.Enabled() && backlog.Cap() == 2);
+
+        // Cap clamp and disable.
+        backlog.Configure(true, 99);
+        assert(backlog.Cap() == Backlog::MaxCap);
+        backlog.Configure(false, 2);
+        assert(!backlog.Enabled());
+        assert(backlog.Gate(1)); // disabled gate never blocks
+        backlog.Configure(true, 2);
+
+        // A direct flip may present before SubmitFlip returns: retire first, then register.
+        // The registration must be a no-op so the stale id cannot occupy a slot.
+        backlog.Retire(50);
+        backlog.Register(50);
+        assert(backlog.Outstanding() == 0);
+
+        // Two in flight fill the cap; the gate blocks until one is retired.
+        backlog.Register(51);
+        backlog.Register(52);
+        assert(backlog.Outstanding() == 2);
+        assert(!backlog.Gate(5)); // times out, drops the stale entries
+        assert(backlog.Outstanding() == 0);
+        assert(backlog.Timeouts() == 1);
+
+        backlog.Register(53);
+        backlog.Register(54);
+        backlog.Retire(53);
+        assert(backlog.Outstanding() == 1);
+        assert(backlog.Gate(5)); // room again
+
+        // Duplicate registration of a frame already in flight must not consume another slot.
+        // FIFO order: list is [54]; register 55 twice -> [54, 55].
+        backlog.Register(55);
+        backlog.Register(55);
+        assert(backlog.Outstanding() == 2);
+        backlog.Retire(55);
+        assert(backlog.Outstanding() == 1);
+
+        // FIFO retirement: retiring the older 54 leaves the newer 55 in place; a new 56 can
+        // then register and be retired, and the list must be empty.
+        backlog.Retire(54);
+        assert(backlog.Outstanding() == 0);
+        backlog.Register(56);
+        backlog.Retire(56);
+        assert(backlog.Outstanding() == 0);
+        backlog.Retire(56); // already retired: harmless
+        assert(backlog.Outstanding() == 0);
+
+        // Sparse ids: only registered ones count.
+        backlog.Register(61);
+        backlog.Register(65);
+        assert(backlog.Outstanding() == 2);
+        backlog.Retire(65);
+        assert(backlog.Outstanding() == 1);
+        backlog.Retire(61);
+        assert(backlog.Outstanding() == 0);
+
+        // A queued EOP flip that fails is cancelled by its exact id.
+        backlog.Register(66);
+        backlog.Register(67);
+        backlog.Cancel(66);
+        assert(backlog.Outstanding() == 1);
+        backlog.Cancel(66); // idempotent
+        assert(backlog.Outstanding() == 1);
+        backlog.Retire(67);
+        assert(backlog.Outstanding() == 0);
+
+        // Disabling clears the backlog and wakes a blocked gate.
+        backlog.Register(68);
+        backlog.Register(69);
+        assert(backlog.Outstanding() == 2);
+        std::thread unblock([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            backlog.Configure(false, 2);
+        });
+        assert(backlog.Gate(500)); // returns true once disabled
+        unblock.join();
+        assert(!backlog.Enabled() && backlog.Outstanding() == 0);
+        // A mode transition must not forget a presentation which preceded registration.
+        backlog.Retire(70);
+        backlog.Configure(true, 2);
+        backlog.Register(70);
+        assert(backlog.Outstanding() == 0);
+    }
+
+    // 6d. A retire that arrives while the gate is blocked wakes it (two in flight, retire one).
+    {
+        Backlog backlog;
+        backlog.Configure(true, 2);
+        backlog.Register(90);
+        backlog.Register(91);
+        std::thread retire([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            backlog.Retire(90);
+        });
+        assert(backlog.Gate(500));
+        retire.join();
+        assert(backlog.Outstanding() == 1);
+        backlog.Retire(91);
+        assert(backlog.Outstanding() == 0);
+    }
+
+    // 6e. Accepted-flip tickets. The bounded backlog registers/retires by a monotonic ticket,
+    // kept separate from the guest simulation content id (which can repeat across accepted
+    // flips). Tickets are allocated before enqueue and the allocate/enqueue orders can differ
+    // across guest threads, so retirement is matched exactly rather than by a high-water mark.
+    {
+        // Strictly increasing and therefore unique; never reset by a mode change.
+        uint64_t last_ticket = AllocateFlipTicket();
+        assert(last_ticket > 0);
+        for (int i = 0; i < 300; ++i) {
+            const uint64_t next_ticket = AllocateFlipTicket();
+            assert(next_ticket > last_ticket);
+            last_ticket = next_ticket;
+        }
+
+        // Two accepted flips that share one simulation cycle still get distinct tickets and
+        // must both occupy backlog slots (no content-id-style dedupe).
+        const uint64_t cycle_ticket_a = AllocateFlipTicket();
+        const uint64_t cycle_ticket_b = AllocateFlipTicket();
+        assert(cycle_ticket_b > cycle_ticket_a);
+
+        const uint64_t older_ticket = AllocateFlipTicket();
+        const uint64_t newer_ticket = AllocateFlipTicket();
+        assert(newer_ticket > older_ticket);
+
+        {
+            Backlog backlog;
+            backlog.Configure(true, 4);
+
+            backlog.Register(cycle_ticket_a);
+            backlog.Register(cycle_ticket_b);
+            assert(backlog.Outstanding() == 2);
+
+            // A newer ticket retiring first must not suppress an older ticket whose Register has
+            // not arrived yet, and the already-retired newer ticket is suppressed exactly.
+            backlog.Retire(newer_ticket);
+            backlog.Register(older_ticket);
+            assert(backlog.Outstanding() == 3);
+            backlog.Register(newer_ticket);
+            assert(backlog.Outstanding() == 3);
+
+            // Exact retirement is idempotent.
+            backlog.Retire(newer_ticket);
+            assert(backlog.Outstanding() == 3);
+
+            backlog.Retire(cycle_ticket_a);
+            backlog.Retire(cycle_ticket_b);
+            backlog.Retire(older_ticket);
+            assert(backlog.Outstanding() == 0);
+        }
+        {
+            // Retained across Configure: a retirement recorded before the mode change is not
+            // forgotten, so a late Register of the same exact ticket is still suppressed.
+            Backlog backlog;
+            backlog.Configure(true, 2);
+            backlog.Retire(newer_ticket);
+            backlog.Configure(true, 2);
+            backlog.Register(newer_ticket);
+            assert(backlog.Outstanding() == 0);
+        }
+    }
 
     // 7. Stubs for present and render markers do not crash when unsupported
     OnRenderSubmitBegin(c_fid_curr);
