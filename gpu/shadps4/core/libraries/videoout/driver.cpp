@@ -573,9 +573,9 @@ void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_
     // Capture identity at the guest's accepted flip request, not from a later
     // global simulation counter on the GPU/presentation worker.
     frame->content_frame_id = content_frame_id;
-    if (content_frame_id != 0) {
-        frame->reflex_frame_id = content_frame_id;
-    }
+    // Zero is also an explicitly captured identity (startup without a pad poll).
+    // Preserve it rather than borrowing the following frame's live counter.
+    frame->reflex_frame_id = content_frame_id;
     // bbport: the bounded backlog registers/retires by this accepted-flip ticket, kept separate
     // from content_frame_id (the Reflex/latency identity). Set unconditionally, including 0, so
     // a pooled frame can never retire a stale ticket from a previous use.

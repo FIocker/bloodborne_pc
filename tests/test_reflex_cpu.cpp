@@ -495,6 +495,22 @@ int main() {
     assert(CurrentSimFrameId() == sim_active + 1);
     OnSimulationEnd();
 
+    // Accepted flip boundaries advance attribution even when the next frame does not
+    // read the pad. A duplicate close must leave the prepared cycle untouched.
+    PreInputSample();
+    uint64_t boundary_id = CurrentSimFrameId();
+    for (int i = 0; i < 100; ++i) {
+        OnSimulationEnd(boundary_id);
+        PreInputSample();
+        const uint64_t next_id = CurrentSimFrameId();
+        assert(next_id == boundary_id + 1);
+        OnSimulationEnd(boundary_id);
+        PreInputSample();
+        assert(CurrentSimFrameId() == next_id);
+        boundary_id = next_id;
+    }
+    OnSimulationEnd(boundary_id);
+
     // 11. Shutdown cleans up gracefully
     Shutdown();
     assert(!IsSupported());
