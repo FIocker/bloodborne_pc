@@ -117,6 +117,9 @@ Dlss::Dlss() : impl{std::make_unique<Impl>()} {
                      : nullptr;
     impl->api = get_api ? get_api() : nullptr;
     if (!impl->api || (impl->api->abi != 1 && impl->api->abi != BBPORT_DLSS_BRIDGE_ABI)) {
+        // Rejected tables may be shorter than our FG interface. Cleanup must not
+        // inspect or call any of their entries after this compatibility check.
+        impl->api = nullptr;
         impl->Disable("bbport_dlss.dll is missing or from another version");
         return;
     }

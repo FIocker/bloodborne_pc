@@ -758,7 +758,9 @@ void TemporalUpscaler::RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color,
 void TemporalUpscaler::ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, bool ldr, u32 w,
                                     u32 h) {
     const auto& settings = BbSettings::Get();
-    const float extra = std::clamp(settings.sharpness.load(), 0.0f, 2.0f) - 1.0f;
+    // NGX no longer sharpens: DLSS needs the full slider range in this pass.
+    const float extra =
+        std::clamp(settings.sharpness.load(), 0.0f, 2.0f) - (UseDlss() ? 0.0f : 1.0f);
     if (!settings.sharpen || extra <= 0.0f) {
         return;
     }
@@ -964,7 +966,7 @@ bool TemporalUpscaler::RecordReactive(vk::ImageView color_view) {
     const vk::PipelineLayout layout = *reactive_pipeline_layout;
     const u32 w = width, h = height;
     // Relative color change times the scale (default 1), zero below the threshold (0.2), at
-    // most the maximum (0.9, never fully reactive) — the defaults of AMD's mask generator.
+    // most the maximum (0.9, never fully reactive) â€” the defaults of AMD's mask generator.
     const auto& settings = BbSettings::Get();
     const std::array<float, 3> params{settings.reactive_scale, settings.reactive_max,
                                       settings.reactive_threshold};
@@ -1309,7 +1311,9 @@ float TemporalUpscaler::SceneMipBias() const {
     if (!Active() || BbSettings::Get().upscaler == BbSettings::UpscalerTaa) return 0.0f;
     const float render = float(BbSettings::Get().active_render_width.load());
     const float output = float(Scaled() ? target_width : 1920u);
-    return render > 0.0f && render < output ? std::log2(render / output) : 0.0f;
+    const float scale_bias = render > 0.0f && render < output ? std::log2(render / output) : 0.0f;
+    // DLSS reconstruction benefits from finer texture samples, including Native AA.
+    return scale_bias - (UseDlss() ? 1.0f : 0.0f);
 }
 
 bool TemporalUpscaler::Scaled() const {
@@ -2198,7 +2202,11 @@ bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource
                                   const Dlss::Resource& depth, u32 w, u32 h, u32 ow, u32 oh,
                                   float frame_ms, bool hdr) {
     Dlss* dlss = Dlss::Get();
-    const Dlss::FeatureDesc desc{w, h, ow, oh, Dlss::QualityForScale(float(ow) / float(w)), hdr};
+    // Sampling an sRGB view decodes to linear light. NGX must use its linear/HDR
+    // precision path even when the original scene was an SDR tonemapped image.
+    const bool linear = hdr || color.format == vk::Format::eR8G8B8A8Srgb ||
+                        color.format == vk::Format::eB8G8R8A8Srgb;
+    const Dlss::FeatureDesc desc{w, h, ow, oh, Dlss::QualityForScale(float(ow) / float(w)), linear};
     bool ok = true;
     if (!dlss->HasFeature(desc)) {
         // The previous feature may still be in use by submitted work; `cmdbuf` stays open.
@@ -2210,7 +2218,6 @@ bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource
     if (ok) {
         // The jitter and motion vectors FSR 3 gets: render pixels, current to previous.
         const float sign = BbToggle::Disabled(1u << 26) ? -1.0f : 1.0f;
-        const auto& settings = BbSettings::Get();
         ok = dlss->Evaluate(cmdbuf, {
             .color = color,
             .depth = depth,
@@ -2222,7 +2229,7 @@ bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource
             .jitter_y = sign * jitter[1],
             .reset = reset,
             .frame_ms = frame_ms,
-            .sharpness = settings.sharpen ? std::min(settings.sharpness.load(), 1.0f) : 0.0f,
+            .sharpness = 0.0f, // Deprecated by NGX; ExtraSharpen applies RCAS after reconstruction.
         });
     }
     if (!ok) {

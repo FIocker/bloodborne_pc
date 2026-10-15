@@ -357,3 +357,24 @@ if (WIN32)
     target_compile_options(aspect-thunk-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
     target_include_directories(aspect-thunk-test PRIVATE ..)
 endif()
+
+# A foreign bridge can end immediately after its ABI word. Exercise rejection and
+# cleanup against a guarded table without initializing Vulkan/NGX. Its DLLs live
+# in an isolated test directory, never beside the packaged renderer.
+if (WIN32)
+    enable_testing()
+    set(BB_DLSS_REJECT_DIR "${CMAKE_CURRENT_BINARY_DIR}/dlss-bridge-reject")
+    add_library(dlss-unknown-bridge-test SHARED EXCLUDE_FROM_ALL ../tests/test_dlss_unknown_bridge.cpp)
+    set_target_properties(dlss-unknown-bridge-test PROPERTIES
+        PREFIX "" OUTPUT_NAME bbport_dlss RUNTIME_OUTPUT_DIRECTORY "${BB_DLSS_REJECT_DIR}")
+    add_executable(dlss-bridge-reject-test EXCLUDE_FROM_ALL ../tests/test_dlss_bridge_reject.cpp
+        shadps4/video_core/renderer_vulkan/vk_dlss.cpp)
+    target_include_directories(dlss-bridge-reject-test PRIVATE shim shadps4)
+    target_compile_options(dlss-bridge-reject-test PRIVATE -UNDEBUG)
+    target_link_libraries(dlss-bridge-reject-test PRIVATE Vulkan::Headers fmt::fmt)
+    set_target_properties(dlss-bridge-reject-test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${BB_DLSS_REJECT_DIR}")
+    add_dependencies(dlss-bridge-reject-test dlss-unknown-bridge-test)
+    file(GENERATE OUTPUT "${BB_DLSS_REJECT_DIR}/nvngx_dlss.dll" CONTENT "test presence sentinel")
+    add_test(NAME dlss-bridge-reject-test COMMAND dlss-bridge-reject-test)
+endif()
