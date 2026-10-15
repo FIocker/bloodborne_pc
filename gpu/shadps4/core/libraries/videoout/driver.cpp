@@ -634,9 +634,11 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         return {};
     };
 
-    // bbport: with a frame limit (uncapped presets) a queued flip is presented as soon as it
-    // arrives and its slot allows, between vblanks, instead of on the next vblank tick.
-    const bool immediate_flips = frame_limit != 0;
+    // PC frame-limited and uncapped presets can present ready frames between vblanks.
+    // With no FPS limit, waiting for a 480 Hz virtual tick quantizes arrivals into
+    // ~2.1 ms steps. Keep fixed-timestep (<=120 Hz) presets on their original ticks
+    // and retain the precise limiter above whenever a frame limit is requested.
+    const bool immediate_flips = frame_limit != 0 || EmulatorSettings.GetVblankFrequency() > 120;
 
     while (!token.stop_requested()) {
         timer.Start();
