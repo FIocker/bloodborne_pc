@@ -1,12 +1,105 @@
 # Windows GPU validation
 
-Evidence is from an RTX 5080 on driver 617.14, FIFO presentation, object motion
-enabled and copied saves in offline play, on the actual native ultrawide desktop
+Frame-generation evidence is from an RTX 5080 on driver 617.14, FIFO presentation,
+object motion enabled and copied saves in offline play, on the actual native ultrawide desktop
 at approximately 120 Hz. Frame rates are PresentMon display intervals, not rates
 inferred from a requested multiplier. The CPU interval below runs from a guest pad
 sample to the real QueuePresent call; it excludes OS input delivery, driver
 queuing, scanout and panel response and is a diagnostic, not input-to-photon
 latency.
+
+## DLSS reconstruction and uncapped delivery follow-up
+
+The follow-up runtime is `66dc150`, probe SHA-256
+`be8246e62a3a07f62b90cccb2c29b553de1a3ca8f4eac74616eab609ecdca0f5`.
+The matching ABI-2 adapter and NVIDIA runtime DLLs are unchanged. The source
+incorporates the reconstruction corrections and uncapped flip-delivery behavior
+carried by #48; the source commits credit its contributor.
+
+DLSS now uses its full RCAS slider range, finer texture sampling and linear-light
+precision for sRGB input views. FSR/TAA sampling policies retain their previous
+behavior. Uncapped PC frames can arrive between virtual vblank ticks rather than
+snapping to the 480 Hz service clock. Fixed-timestep presets, the default source
+cap, and the precise capped-frame limiter retain their existing behavior.
+
+### Same-machine reconstruction comparison
+
+RTX 5080, driver 617.14, the same copied offline save and stationary view,
+DLSS Quality, FG Off, Reflex Off, Immediate presentation and sharpness 0.50.
+Each run lasts 150 s; the final 60 s is measured. SDK input/output sizes match
+across these runs. The submitted rates above the monitor refresh are throughput,
+not full-frame scanout rates or input-latency measurements.
+
+| Snapshot | Submitted FPS | Display-change p99 | p99.9 |
+| --- | ---: | ---: | ---: |
+| #48 `9495746`, two runs | 162.14-162.91 | 7.93-8.01 ms | 8.33-8.52 ms |
+| Previous implementation `cc038d6`, three controls | 175.69-176.33 | 11.77-12.14 ms | 13.88-14.36 ms |
+| Reconstruction-only control `c7975b4` | 165.49 | 13.04 ms | 14.00 ms |
+| Follow-up `66dc150`, two runs | 164.56-164.78 | 7.98-8.01 ms | 8.24-8.41 ms |
+
+The reconstruction-only control separates the additional reconstruction work
+from the vblank scheduling correction. The final runtime recovers #48's interval
+regularity and crisper stationary texture detail, while the finer sampling and
+working sharpening cost throughput compared with the earlier, less expensive
+reconstruction path. These are measurements of this scene and hardware, not a
+universal speed or temporal-quality ranking.
+
+### Frame generation and reconstruction checks
+
+| Case | Source FPS (tail p50) | Display FPS | Display p99 / p99.9 |
+| --- | ---: | ---: | --- |
+| DLSS 2x / 60 cap | 59.98 | 119.98 | 8.372 / 8.426 ms |
+| FSR 2x / 60 cap | 59.96 | 120.05 | 8.373 / 8.411 ms |
+| DLSS 2x / 30 cap | 29.99 | 60.00 | 18.628 / 19.157 ms |
+| FSR 2x / 30 cap | 29.99 | 60.00 | 18.552 / 19.291 ms |
+| DLSS 3x / 40 cap | 39.98 | 119.98 | 9.637 / 10.273 ms |
+| DLSS 4x / 30 cap | 29.96 | 120.00 | 9.525 / 10.492 ms |
+| DLSS 2x / GPU constrained, 60 cap | 52.66 | 105.20 | 12.865 / 35.447 ms |
+| DLSS 2x / 6K Balanced, 60 cap | 59.95 | 119.65 | 11.579 / 15.700 ms |
+| DLSS 2x / Native AA, native ultrawide | 59.96 | 119.88 | 9.876 / 10.201 ms |
+| DLSS 2x / matched 1440p | 59.97 | 120.01 | 8.371 / 8.392 ms |
+| Installed DLSS 2x / 60 cap | 59.97 | 120.01 | 8.373 / 8.396 ms |
+| Installed FSR 2x / 60 cap | 59.98 | 120.00 | 8.371 / 8.396 ms |
+
+Generation/source ratios were checked from the final 30 pacing reports, alongside
+PresentMon intervals, retained foreground ownership and short-window memory growth.
+The native-AA case retained SDK quality mode 0. Three separate Quality/60 FPS
+runs loaded sharpness 0, 0.5 and 2 at startup. Matched wall-region normalized
+gradients were 0.06025, 0.06251 and 0.10117, with nearly constant mean luminance;
+root inspection confirmed progressively stronger edges and normal world/HUD
+composition. These are functional slider checks, not an objective quality ranking.
+
+The runtime passes 70 Python checks (one optional dump-dependent check skipped),
+ten native CPU suites on Windows, two shader/SPIR-V checks and the matched ABI-2
+adapter table. The new guarded-table CTest rejects an unknown bridge version
+and repeats cleanup without initializing a Vulkan device or NGX.
+
+The installed checks launched the actual staged executable and matching DLLs.
+The prior one-hour endurance and CPU latency evidence below retains its older
+executable identity; it is not a one-hour or physical-latency validation of this
+follow-up build.
+
+Derived measurements: [comparison CSV](data/dlss-sr-fg-comparison-2026-10-15.csv).
+
+The 8K configuration exceeded this 16 GB card's VRAM budget and spilled into
+shared GPU memory. The working set plateaued, but source FPS fell to about 10.
+It is retained as a capacity-limit case, not a successful 30-60 source-FPS test.
+The constrained-load case is interpreted only after confirming that its working
+set fits memory. Rare longer intervals remain: its display p99.9 is 35.45 ms.
+No physical display modes were changed.
+
+The stock #48 FSR run at the recorded snapshot steadily accumulated private and
+GPU allocations and degraded over its 180 s run. Follow-up FSR allocation growth
+is recorded separately in the CSV. The stock and follow-up 4K settings differ in
+FG viewport fitting, so their memory sizes are not pixel-matched. The dedicated
+1440p DLSS comparison uses equal generation dimensions. Missing provider
+transient-retirement hooks are a source-supported explanation for the stock
+FSR growth; no isolated patched-#48 A/B was performed.
+
+Raw game data, saves, logs and captures remain local. The derived table records
+source/probe identities, windows, cadence, memory and focus conditions without
+machine paths. Still images and stationary pacing tests do not establish
+sustained-combat image quality, online compatibility or physical input latency.
 
 ## Tested source identities
 

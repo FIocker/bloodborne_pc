@@ -966,7 +966,7 @@ bool TemporalUpscaler::RecordReactive(vk::ImageView color_view) {
     const vk::PipelineLayout layout = *reactive_pipeline_layout;
     const u32 w = width, h = height;
     // Relative color change times the scale (default 1), zero below the threshold (0.2), at
-    // most the maximum (0.9, never fully reactive) â€” the defaults of AMD's mask generator.
+    // most the maximum (0.9, never fully reactive) — the defaults of AMD's mask generator.
     const auto& settings = BbSettings::Get();
     const std::array<float, 3> params{settings.reactive_scale, settings.reactive_max,
                                       settings.reactive_threshold};

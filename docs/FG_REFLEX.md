@@ -112,9 +112,27 @@ native-AA SDK mode. This adjustment does not apply to TAA, whose current path
 requires identical input and output dimensions; the existing non-16:9 TAA menu
 aliasing remains a known limitation.
 
+## DLSS reconstruction and uncapped delivery
+
+DLSS uses the full 0..2 sharpening slider through RCAS after reconstruction;
+NGX's deprecated sharpness parameter is zero. Finer DLSS texture sampling also
+applies to Native AA, and sRGB input views select linear-light precision.
+These corrections add rendering work compared with the former reconstruction
+path. FSR and TAA retain their existing sharpening and sampler policies.
+
+With a zero source-FPS limit, uncapped PC frames can present between virtual
+vblank notifications rather than snapping to the service clock. Fixed-timestep
+presets, the default source cap and the precise capped-frame limiter retain their
+existing behavior. See GPU_VALIDATION.md for the matched reconstruction controls.
+
+Unknown DLSS bridge versions are discarded before any cleanup callback can inspect
+the table. A Windows CPU test uses a guarded, truncated table to exercise this
+path. Use the matching supplied adapter: the competing ABI-2 FG layouts are not
+interchangeable.
+
 ## Validation and package
 
-Compilation, 70 Python tests, nine native CPU suites, two shader/SPIR-V checks
+Compilation, 70 Python tests, ten native CPU suites on Windows, two shader/SPIR-V checks
 and the ABI-2 adapter table pass. Hardware validation distinguishes source cadence
 from displayed cadence, and CPU pad-sample-to-present diagnostics from physical
 input latency. Latest-candidate gameplay, changing-load, memory and recovery
