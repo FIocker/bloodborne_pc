@@ -231,7 +231,7 @@ def main():
     shutil.rmtree(hud_layer, ignore_errors=True)
     canvas = hud_canvas(output_size(read_settings(Path(config))))
     if canvas != OUTPUT_SIZE and (game_app_version(game) in (None, '01.09') or env.get('BB_FORCE_PATCHES')):
-        position = ini_value(config, 'hud_position') or '100'
+        position = (ini_value(config, 'hud_position') or '0').strip()
         if not run_script('hud_layout.py', game, '--out', hud_layer, '--canvas-width', canvas[0],
                           '--position', max(0, min(100, int(position) if position.isdigit() else 100)) / 100,
                           '--source', text_layer, optional=True):
@@ -306,7 +306,7 @@ def main():
         if scaled_output or env.get('BB_OUTPUT_RES'):
             movie_output = scaled_output or env['BB_OUTPUT_RES']
             ow, oh = map(int, movie_output.split('x'))
-            if ow * 9 != oh * 16:
+            if patched and ow * 9 != oh * 16:
                 live = '0'
                 env['BB_UI_RES'] = movie_output
                 print('Aspect correction: centered 16:9 stage; aspect changes require restart')
