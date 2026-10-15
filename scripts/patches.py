@@ -152,11 +152,18 @@ def scaled_sizes(settings):
         preset=int(settings.get('preset','0') or 0)
         scale=PRESET_SCALES[max(0,min(preset,len(PRESET_SCALES)-1))]
     render=tuple(max(2,round(v/scale/2)*2) for v in out)
-    # A scene of exactly the UI coordinate space's size (1920x1080 at 4K Performance, the
-    # ultrawide HUD canvas at 2560x1080 or 3840x1080 native) is indistinguishable from it: the
-    # port's UI composition recognizes UI draws by that size (HUD gauges came out too long).
-    canvas=hud_canvas(out)
-    if render==canvas: render=(canvas[0]-4,canvas[1]-2)
+    # A scene of exactly the game's 1920x1080 UI coordinate space (4K Performance) is
+    # indistinguishable from a UI draw: the port's UI composition recognizes UI draws by that
+    # size and the HUD gauges came out too long. The ultrawide HUD canvas (hud_canvas) is the
+    # hud_layout mod layer's logical width only, never the guest UI space, so it does not matter
+    # here (BB_UI_RES is the output size at every ratio, run.py/patches.py main()).
+    if render==OUTPUT_SIZE:
+        render=(OUTPUT_SIZE[0]-4,OUTPUT_SIZE[1]-2)
+    elif out[0]*9!=out[1]*16 and render==out and settings.get('upscaler')!='taa':
+        # Non-16:9 movie viewports use the physical output too. Native/off scene targets
+        # otherwise alias the UI size and inventory draws sample the full icon atlas.
+        # Keep TAA's exact-size contract; its native path cannot accept a render nudge.
+        render=(out[0]-4,out[1]-2)
     return render,out
 
 
