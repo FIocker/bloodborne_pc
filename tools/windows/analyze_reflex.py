@@ -48,8 +48,8 @@ def summarize(text, tail_seconds=39):
                 for p in (50, 95, 99)}
 
     # A guest input/simulation cycle logs its first pad sample once, but the
-    # present path can run several times per cycle (frame generation, repeated
-    # flips), so one logical id may appear with the same sample and several
+    # historical guest flips can present several times per cycle; generated
+    # presentations do not emit CPU records. One id may have several real
     # presents. Group by (id, sample); collapse exact (id, sample, present)
     # duplicates that a queried cycle repeats verbatim; then drop records whose
     # sample or timestamps are invalid before any latency is measured.

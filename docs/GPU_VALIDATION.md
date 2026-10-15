@@ -1,64 +1,206 @@
 # Windows GPU validation
 
-Tests used an RTX 5080, driver 617.14, FIFO presentation and object motion enabled, with copied saves in offline play. The current desktop is a native ultrawide at approximately 120 Hz. Earlier runs used a 1920x1080 desktop and fitted reconstructed 4K and custom ultrawide targets to it; those results are kept below as historical. Camera movement was scripted and the reported intervals exclude loading and initialization. Matched comparisons ran 150 seconds, the scripted gameplay run 900 seconds, and the soaks one hour.
+Evidence is from an RTX 5080 on driver 617.14, FIFO presentation, object motion
+enabled and copied saves in offline play, on the actual native ultrawide desktop
+at approximately 120 Hz. Frame rates are PresentMon display intervals, not rates
+inferred from a requested multiplier. The CPU interval below runs from a guest pad
+sample to the real QueuePresent call; it excludes OS input delivery, driver
+queuing, scanout and panel response and is a diagnostic, not input-to-photon
+latency.
 
-## Frame pacing
+## Tested source identities
 
-Matched 150 second native-ultrawide runs, PresentMon display intervals, independent flip:
+The core pacing, latency and endurance results below used runtime commit
+`0a1ffa3`, probe SHA-256 prefix `295d3c67`. The integration build at `e09ff36`
+(probe `36999455`) incorporates Windows v1.7.5, including its HUD layer and
+launcher updates. Its focused regressions are being collected separately; the
+older hour-long runs are evidence for their exact executable, not this rebuild.
+The frame-generation queue and cadence algorithms are unchanged by the merge.
 
-| Mode | Source cap | Observed display FPS | Display median / p99 |
+Reflex On is the recommended tested mode. Twelve of thirteen bounded cases
+passed their original criteria. The FSR 2x/60 FPS Reflex-Off control retained
+120 displayed FPS but missed the strict 10 ms display-p99 criterion: 10.462 ms,
+and 10.415 ms in a 300 second repeat. That limitation remains a failed control.
+
+## Bounded measured results
+
+Native 60 FPS source, 180 s, Reflex On, independent queue, explicit-ID
+attribution (`out/posthoc/grouped-native-dlss-report.json`,
+`out/posthoc/grouped-native-fsr-report.json`):
+
+| Backend | Source FPS | Display FPS | Display p50 / p99 |
 | --- | ---: | ---: | --- |
-| DLSS 2x, Reflex On | 60 | 119.97 | 8.34 / 8.89 ms |
-| DLSS 2x, Reflex On, repeat | 60 | 119.97 | 8.34 / 9.19 ms |
-| DLSS 2x, Reflex Off | 60 | 120.02 | 8.34 / 13.26 ms |
-| DLSS 2x, driver-only pacing | 60 | 119.88 | 8.34 / 8.37 ms |
-| DLSS 2x, Reflex Boost | 60 | 119.97 | 8.34 / 8.66 ms |
-| FSR 2x | 60 | 119.88 | 8.34 / 8.37 ms |
-| DLSS 3x | 40 | 120.03 | 8.34 / 10.69 ms |
-| DLSS 4x | 30 | 119.99 | 8.34 / 15.08 ms |
-| DLSS 2x | 30 | 60.01 | 16.34 / 23.80 ms |
-| FSR 2x | 30 | 60.00 | 16.60 / 22.28 ms |
+| DLSS 2x | 59.99 | 120.01 | 8.342 / 8.372 ms |
+| FSR 2x | 59.99 | 119.95 | 8.342 / 8.373 ms |
 
-These are PresentMon display intervals, not rates inferred from a requested multiplier. Each row owned the foreground for essentially the whole run (149-150 of 150 samples) and presented through independent flip, with no reported ETW event loss. FSR completes its composition copy before the presentation deadline and uses a separate graphics queue when available; DLSS keeps its existing queue and deadline path.
+The adaptive gate settled on the one-deep depth in both native runs (both depths
+observed, ending on one) with no watchdog release.
 
-The 30 and 40 source-cap runs contain many repeated input-cycle identifiers in the CPU interval stream, so only their display pacing is reported. Repetition also occurs less frequently at 60 FPS. Multiple flips can share a pad sample; these records must not be treated as independent input events.
+Variable load, 420 s, live preset changes, both phases
+(`out/posthoc/grouped-range-dlss-report.json`,
+`out/posthoc/grouped-range-fsr-report.json`):
 
-Matching depth/motion captures were finite, correctly sized and within expected ranges. HUD extraction and display fitting were checked from generated-frame captures. FSR's generated and real fitted images were distinct and filled the presentation area. A DLSS 4x capture contained three distinct fitted intermediate images with HUD colors matching the real endpoint. Capture readback was disabled for ordinary pacing measurements.
+| Backend | Phase | Source FPS (p50) | Display FPS | Display p99 |
+| --- | --- | ---: | ---: | ---: |
+| DLSS | heavy | 45.6 | 90.9 | 14.56 / 14.50 ms |
+| DLSS | performance | 59.9 | 119.8 | 9.71 / 9.63 ms |
+| FSR | heavy | 42.6 | 84.8 | 16.69 / 17.12 ms |
+| FSR | performance | 59.9 | 119.8 | 9.68 / 9.63 ms |
 
-Native reconstruction tests above 4K that produced no generated frames are excluded from frame-generation claims. A successfully created SDK feature alone is not proof that generation remains active.
+The phase columns list the two heavy windows and the two recovery windows. Both
+backends returned to about 119.8 displayed FPS with no skipped frames and no gate
+timeouts inside a phase. The FSR range run had one Reflex backlog watchdog
+release, located at 14.46-14.66 s, before the first Continue pulse
+(`out/posthoc/grouped-fsr-watchdog-location.json`); steady phase checks remain
+strict.
 
-### Historical fitted-desktop session
+A heavy 7680x4320 DLSS run held source p50 45.6 FPS at 90.85 displayed FPS
+(display/source 1.99) with display p99 14.43 ms and no gate timeout
+(`out/posthoc/grouped-heavy-report.json`).
 
-These earlier runs fitted reconstructed 4K and custom ultrawide targets to a 1920x1080 desktop and are retained for comparison; they do not establish native high-resolution scanout. Foreground ownership was effectively complete and the relevant traces used independent flip, with no reported ETW event loss.
+Source-cap and multiplier cases, 150 s each, from the same audit:
 
-| Mode | Source cap | Observed display FPS | Display median / p99 |
-| --- | ---: | ---: | --- |
-| FSR 2x, previous pacing | 60 | 113.40 | 8.34 / 18.92 ms |
-| FSR 2x, paced copy completion | 60 | 119.82 | 8.35 / 10.51 ms |
-| FSR 2x with FSR 3 reconstruction | 60 | 119.83 | 8.42 / 10.26 ms |
-| DLSS 2x, Balanced, fixed-60 patch | 60 | 120.00 | 8.34 / 17.37 ms |
-| DLSS 3x | 40 | 119.88 | 8.34 / 8.39 ms |
-| DLSS 4x | 30 | 119.88 | 8.34 / 8.39 ms |
-| FSR 2x, paced copy | 30 | 60.00 | 16.69 / 18.82 ms |
+| Case | Source FPS | Display FPS | Display p99 |
+| --- | ---: | ---: | ---: |
+| DLSS 2x, Reflex On, 30 cap | 29.99 | 60.00 | 18.63 ms |
+| DLSS 2x, Reflex Off, 30 cap | 30.00 | 60.00 | 18.14 ms |
+| FSR 2x, Reflex On, 30 cap | 29.99 | 60.00 | 18.60 ms |
+| DLSS 3x, 40 cap | 39.97 | 119.98 | 9.51 ms |
+| DLSS 4x, 30 cap | 29.98 | 120.00 | 9.51 ms |
 
-## Reflex and latency
+The 3x and 4x cases logged presented/source ratios of 3.00 and 4.00.
 
-At a 60 source cap with DLSS 2x on native ultrawide, the CPU-owned interval from the first pad sample of a guest cycle to the real-frame present call was about 32.89 ms with Reflex On, about 32.89 ms on a repeat run, about 47.98 ms with Reflex Off, and about 40.00 ms with the application queue gate disabled (driver-only pacing). Display pacing held at about 120 FPS through independent flip, with a display p99 near 9 ms on the On runs.
+Whole-mode Reflex comparison, CPU sample-to-present interval over the final 30 s
+of matched scene pairs (`bounded-candidate-audit.json`, plus
+`out/posthoc/grouped-boost-report.json` for the Boost case):
 
-The CPU interval carries the guest simulation identity from the first pad sample through its accepted flip request to the real-frame present call. It excludes OS input delivery, driver queuing, scanout and panel response, so it is a diagnostic interval and not physical input-to-photon latency; hardware capture would be needed to establish that. Driver GPU timing windows on shared queues can be implausibly short and are treated conservatively.
+| Pair | On (p50 / p95 / p99) | Off (p50 / p95 / p99) |
+| --- | --- | --- |
+| DLSS native 60 | 27.02 / 29.13 / 29.81 ms | 50.55 / 51.43 / 51.80 ms |
+| FSR native 60 | 26.67 / 29.64 / 30.54 ms | 57.55 / 58.43 / 58.68 ms |
+| DLSS 30 cap | 85.20 / 86.10 / 86.80 ms | 118.58 / 119.62 / 120.13 ms |
 
-Reflex On/Off comparisons in the earlier fitted-desktop session were inconclusive (about 65 ms both ways) and are superseded by the native-ultrawide numbers above.
+Reflex On lowers the interval against its matched Reflex-Off control in all three
+pairs. Boost (DLSS native 60) measured 26.33 / 29.08 / 29.74 ms, no meaningful
+change from On. These are whole-mode intervals, not vendor-only or
+input-to-photon figures.
 
-## Stability and reproduction
+## Design notes
 
-One hour of DLSS 2x generation on the intermediate safe-drain build kept private memory in a flat ~7100 MiB band over the last 30 minutes (net +1 MiB), with handle counts drifting down and dedicated VRAM constant; display p99 after the first two minutes was about 15 ms, with a single ~120 ms display gap and a minimize/restore cluster. That run used an intermediate build identity, so it does not validate the final candidate's DLSS path.
+The independent presentation queue belongs to the same queue family as the
+graphics queue, so presentation copies can bypass the next source frame's draw
+work without changing image ownership rules; the shared queue remains the
+fallback. The adaptive depth starts at two, engages one only after sustained
+cap-tight cadence to remove roughly a frame of queueing, and returns to two when
+the source is measurably GPU-limited. In the 30 FPS and synthetic range cases,
+this feedback occasionally alternates between one and two: tightening the gate
+slows the measured cadence enough to expand it again. The 30 FPS DLSS case spends
+about 11% of its time at one, so its CPU interval improvement is smaller than at
+native 60 FPS. This is a bounded policy limitation, not evidence of sustained
+one-frame queuing at every cap.
 
-One hour of FSR 2x generation on the input-cycle queue candidate (probe D1EF) kept private memory flat (~6630 MiB, net -19 MiB over the last 30 minutes), dedicated VRAM constant at 4054 MiB, and handle counts trending down (-84); display p99 after the first two minutes was 8.37 ms and the Reflex backlog gate recorded no timeouts. The game owned the foreground for 3592 of 3593 samples. The later queue correction counts each accepted flip separately and requires its own regression checks.
+A targeted identity trace (`519f471`, probe `d38df55f`) compared 8,665 prepared
+frames including 6,237 with generation guides: the scheduler identity matched the
+accepted flip in every case while 6,236 generated frames carried stale
+thread-local metadata. That supports carrying the accepted flip identity into
+preparation (`out/posthoc/identity-trace-report.json`) and does not justify a
+scheduler identity handover or a locking refactor. The later grouped-marker
+change is included in the current bounded hardware results; inconsistent driver
+GPU-end reports remain excluded from latency evidence.
 
-A 300 second DLSS run on that candidate held the game window minimized for ten seconds and restored it; the game re-acquired the foreground and generation resumed (about 120 FPS presented, 290 of 300 samples owned). A 900 second FSR gameplay run exercised inventory, a Hunter's Mark reload and one enemy encounter ending in player death and respawn; generation stayed active in the open scene and temporarily bypassed during loads before returning. These are limited encounter, death and reload checks, not extended combat.
+Build and CPU regression checks collected with this freeze pass: 58 Python tests,
+nine native suites, two shader/SPIR-V checks and the ABI-2 adapter table
+(`out/fg-validation.json`). They say nothing about GPU cadence.
 
-CPU validation passed 54 Python tests, nine native suites, two shader/SPIR-V checks and the ABI-2 DLSS adapter table. All five tracked FSR vendor patches were applied to a fresh checkout and produced byte-identical modified files. The package retains the paired adapter/runtimes and license notices; generation defaults to Off.
+## Targeted validation and captures
 
-Core and synchronization validation exposed missing transfer usage on motion/output images and a reset-clear barrier with an insufficient access mask; these were corrected. The targeted synchronization fixes for the `08912` VUID and the RedirectColor/LOADRAW path are gone in matched 150 second On/Off runs. Remaining reports occur with generation disabled as well: legacy shader-interface warnings (`Location-06272`, `OpEntryPoint-08743`), threading warnings, and a write-after-present hazard. The renderer is **not validation-clean**. Validation-layer runs are excluded from frame-pacing numbers. The marker/acquire host-thread warning conflicts with the [specified concurrency exception for `vkSetLatencyMarkerNV`](https://docs.vulkan.org/refpages/latest/refpages/source/vkSetLatencyMarkerNV.html); marker lifetime is serialized with swapchain destruction, without blocking simulation markers behind acquire/present.
+Five 150 second core/synchronization-layer runs used the frozen candidate:
+DLSS 2x and FSR 2x at 30 source FPS, DLSS-SR with generation disabled, and DLSS
+3x at 40 / 4x at 30. The unused-attachment `08912` report and the targeted
+attachment-LOAD read hazard are absent in all five. Captured depth is finite and
+inside 0..1; motion is finite with no displacements above half the render width.
+Generated and real presentation buffers have distinct hashes at every multiplier.
+The full-world, hunter and HUD compositions were visually inspected. These
+instrumented runs establish no pacing or image-quality guarantee for other scenes.
 
-All gameplay processes were intentionally stopped at the end of each run. HDR generation, other GPUs/drivers, online co-op, extended combat, repeated deaths and travel between regions, variable GPU load, and multi-hour stability have not been established. Raw logs, saves and captures remain local.
+The renderer is not validation-clean. Legacy shader-interface reports and
+`WRITE_AFTER_PRESENT` occur with generation disabled too. DLSS-SR's clear-to-blit
+`READ_AFTER_WRITE` also reproduces in that control. DLSS FG additionally reports
+`VkBufferDeviceAddressInfo-buffer-02601` for an NGX buffer usage; this warning is
+absent from the generation-disabled control and is not classified as inherited.
+The marker/acquire/present threading reports conflict with the explicit concurrent
+swapchain-use exception in the [Vulkan marker specification](https://docs.vulkan.org/refpages/latest/refpages/source/vkSetLatencyMarkerNV.html).
+Destroying the swapchain remains separately synchronized. Reports remain enabled
+and are retained locally (`out/posthoc/grouped-layer-guide-report.json`).
+
+## Endurance and limits
+
+Both native hour-long runs completed 3600.33 s and verified minimize/restore
+(11 s DLSS, 10 s FSR). The 1900-3400 s quiet window contains 300 process-memory
+samples per backend, after the movement/loading sequence and window recovery.
+Generation remained active at the endpoint, with no skipped slots in its final
+60 samples. The world and HUD look normal after restoration.
+
+| Backend | Quiet display FPS / p99 | Final recovery p99 | Private memory slope | Dedicated GPU slope |
+| --- | --- | ---: | ---: | ---: |
+| DLSS 2x | 119.99 / 8.370 ms | 8.370 ms | -0.004 MiB/min | 0.000 MiB/min |
+| FSR 2x | 119.99 / 8.378 ms | 8.777 ms | +0.072 MiB/min | 0.000 MiB/min |
+
+Private-memory early/late quiet medians differ by 0.32 MiB (DLSS) and 0.47 MiB
+(FSR). Shared GPU memory is effectively flat; handles decrease. These runs show
+no sustained memory growth in this window, not a universal absence of leaks.
+Separate eight-minute runs on the same executable visually confirmed an enemy
+attack, death, loading and respawn for both backends. A further FSR run on a
+fallback desktop crashed during respawn in the guest game's heap-free path at
+`0x20859c7`. A native-resolution FSR 2x repeat and the FG-disabled control both
+completed death/respawn without reproducing it. Its cause remains unresolved;
+these successful repeats do not establish that the fault is fixed or unrelated
+to generation.
+
+## Integrated build checks
+
+The integrated executable retains the core binary from `e09ff36` (probe
+`36999455`). The launcher-script follow-up `bc194dd` changes only unpatched-game
+UI fallback and whitespace parsing for HUD position; its normal patched 1.09
+path is unchanged. CPU checks pass: 68 Python tests (one optional game-dump check
+skipped), nine native suites, two shader/SPIR-V checks and the ABI-2 adapter
+table. Frozen launcher graphics-control checks pass too.
+
+Clean fixed-cadence regressions, reconstructed to the native ultrawide desktop,
+Reflex On and object motion enabled:
+
+| Mode | Source cap | Display FPS | Display p99 |
+| --- | ---: | ---: | ---: |
+| DLSS 2x | 60 | 120.00 | 8.52 ms |
+| FSR 2x | 60 | 120.01 | 8.37 ms |
+| DLSS 2x | 30 | 60.00 | 18.59 ms |
+| FSR 2x | 30 | 60.00 | 18.65 ms |
+| DLSS 3x | 40 | 119.99 | 9.61 ms |
+| DLSS 4x | 30 | 120.00 | 9.63 ms |
+
+The 60-cap cases ran 180 s with the last minute measured; the others ran 150 s
+with the last minute measured. All held independent flip and passed their
+original cadence/interval criteria, with no expired slots in the measurement
+tail. An eight-minute integrated FSR run also visually confirmed an enemy attack,
+death and respawn, including a full-width death backdrop and centered HUD.
+Both 300 s changing-load runs passed as well. DLSS measured 45.8 source /
+91.79 displayed FPS in its first heavy window (p99 14.46 ms), recovered to
+119.78 displayed FPS (p99 9.88 ms), and returned to 45.8 source / 90.33 displayed
+FPS (p99 16.29 ms). FSR measured 42.7 source / 85.72 displayed FPS (p99 16.17 ms),
+recovered to 119.81 displayed FPS (p99 9.79 ms), and returned to 42.7 source /
+85.36 displayed FPS (p99 16.74 ms). These are synthetic reconstruction-load
+changes fitted to the native desktop, not a change to the physical display mode.
+No measured phase contained expired slots or a backlog timeout; FSR had one
+expired slot during a provider transition. The nine integrated cases pass their
+original criteria. Two interrupted FSR attempts remain excluded and preserved.
+Final installed-build UI and smoke checks are pending. No hour-long memory run
+has been repeated on this integrated executable.
+
+The Reflex comparisons measure the whole implemented mode, meaning driver pacing
+plus the bounded accepted-source gate, rather than the isolated vendor Reflex
+contribution; no isolated vendor latency benefit has been demonstrated. The CPU
+sample-to-present interval is a diagnostic and is not input-to-photon latency.
+Driver GPU-end reports are inconsistent with the application's logical grouping
+and are not used as evidence. HDR generation, other GPUs and drivers, online
+co-op, sustained combat, travel between regions and multi-hour stability remain
+unestablished. Raw logs, saves and captures stay local.

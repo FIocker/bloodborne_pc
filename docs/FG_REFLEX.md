@@ -15,6 +15,34 @@ The six additions are:
 
 Generation uses completed source frames and skips intermediate presentation slots whose deadlines have expired. It seeds SDK history after scene changes or serial gaps. Depth, motion and camera data are captured with the matching display buffer; leased frame resources remain owned until their GPU work and presentation complete.
 
+Reflex treats an interpolation group as one application frame. Ordinary present markers
+surround the whole group, while out-of-band present markers surround each physical
+presentation, including its real endpoint. This retains a single source identity across
+all generated images, following Vulkan's [frame-attribution rules](https://docs.vulkan.org/spec/latest/chapters/VK_KHR_surface/wsi.html#lowlatency-frame-attribution).
+
+Reflex bounds unfinished source work with a small queue of accepted flip tickets.
+Each accepted flip allocates a monotonic ticket. For generation, the presenter releases
+that ticket after the matching render/evaluation timeline completes, before waiting for
+presentation deadlines. Ordinary and loading frames retire at the presentation endpoint.
+Retirement is idempotent and never releases the frame or SDK resources: their separate
+leases stay alive until GPU work and presentation complete. The source-work cap starts
+at two. After two seconds of consecutive source periods within 2% of the selected
+frame-rate cap, it tightens to one to reduce queued latency. Eight consecutive periods
+more than 3% slower restore two, keeping the GPU fed under heavier load. Missing
+generation, discontinuities and cap changes reset that history. Capacity changes retain
+accepted tickets and retirement history. `BB_REFLEX_MAX_QUEUED` overrides the adaptive
+policy in the range 0ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“4; zero disables the application gate.
+
+Simulation advances at each accepted application-frame boundary, even when the guest
+does not poll input. For EOP flips, IRQ registration and all graphics command-buffer
+pairs are enqueued under the captured frame identity before the cycle closes and the
+next cycle is paced. Driver sleep and the source-work gate precede the next actual pad
+sample. Input markers and CPU sample timestamps are emitted only for real pad reads.
+The guest flip/submission boundary is serialized across guest threads; GPU, IRQ and
+presentation workers never take that lock. On the GPU thread, deferred draw recording
+drains before a scheduler identity change, so the boundary flush cannot submit a buffer
+that deferred workers are still populating.
+
 ## Settings
 
 | INI key | Environment variable | Values | Default |
@@ -28,28 +56,60 @@ FSR supports Off/2x; selecting FSR clamps a higher multiplier to 2x. Unsupported
 ## Diagnostics
 
 - `BB_FG_TIMING=1`: logs observed source and presentation rates, generated presentations and skipped slots. Presentation calls are not proof of displayed scanout cadence; compare with PresentMon when GPU testing is permitted.
-- `BB_REFLEX_TIMING=1`: logs available driver latency reports. These are not input-to-photon measurements.
+- `BB_REFLEX_TIMING=1`: samples available driver latency reports once per second.
+  These are not input-to-photon measurements. CPU input/present records remain
+  per frame. `BB_REFLEX_DRIVER_TIMING_FULL=1` restores per-frame driver queries
+  for detailed diagnosis; those queries can affect pacing under GPU load.
 - `BB_REFLEX_TIMING=1` also logs `reflex cpu` intervals from the first pad sample
   of a guest simulation cycle to its real-frame present call. The guest's flip
   request carries this identity through GPU and presentation workers. This
   driver-independent interval excludes OS input delivery, driver queuing,
   scanout and panel response; it is not physical input-to-photon latency.
+  The frame boundary gives each accepted application frame its own identity, while
+  a frame without a pad read has no input sample interval. Generated presentations
+  do not emit these CPU records. Historical traces can contain several real presents
+  of one sampled cycle, so the analyzer reports the first and last presentation
+  separately (`cpu_first_present_ms`, `cpu_last_present_ms`) and counts repeated
+  records. Exact duplicate queries are collapsed; repeated records are not
+  independent input events.
+- `BB_REFLEX_TIMING=1` also logs the `reflex gate:` backlog state (cap, pending
+  depth, cumulative timeouts) and a `reflex backlog: wait timed out` line when
+  the gate deadline (150 ms) expires and drops a stale entry.
 - `BB_FG_TRACE=1`: logs per-source GPU completion, deadlines and present-call
   spans. Keep detailed tracing off during ordinary play.
-- FSR generation uses a second graphics queue in the same family when available.
-  Its composition copies complete before precise CPU presentation deadlines.
-  `BB_FSR_PRESENT_QUEUE=0` disables the independent queue for diagnostics;
-  `BB_FSR_GPU_PACING=0` disables pacing after copy completion. Both improvements
-  are on by default for FSR generation. DLSS and ordinary presentation keep
-  their existing queue and pacing path.
+- Both generation backends submit their composition copy before its presentation
+  deadline, wait for copy completion, then precisely pace the presentation. Each
+  uses a second graphics queue in the same family when available, so copies do
+  not wait behind the next source frame's draw work. The shared queue remains
+  the fallback. `BB_FSR_PRESENT_QUEUE=0` or `BB_DLSS_PRESENT_QUEUE=0` disables the
+  respective independent queue. `BB_FSR_GPU_PACING=0` or `BB_DLSS_GPU_PACING=0` restores the respective
+  backend's former CPU-before-copy timing for diagnostic comparisons.
+- Reflex uses explicit monotonic submission IDs when presentation has an independent
+  queue, which is excluded from render attribution. The shared-queue fallback uses
+  render markers so older presentation copies can retain their captured identity.
+  `BB_REFLEX_MARKER_ATTRIBUTION=0` forces explicit IDs and `=1` forces render markers
+  for diagnostic comparisons.
 - `BB_FG_CAPTURE_DIR=<folder>`: captures one generated frame once its rendered serial reaches `BB_FG_CAPTURE_FRAME` (default 120). Files are written in `frame_<serial>` after the draw timeline completes. Readback can affect performance; keep it off during pacing measurements.
+- `BB_REFLEX_SUBMIT_TRACE=1`: compares accepted flip IDs with thread-local metadata and
+  the scheduler's recorded ID at preparation and submission. This is a detailed diagnostic;
+  leave it disabled for ordinary gameplay and timing comparisons.
 
 Captures contain `depth.bin` (R32 hardware depth in 0..1), `motion.bin` (RG16 current-to-previous motion in render pixels), scene/UI/display snapshots, generated images and `guides_manifest.json`. `ui_rgba8.raw` captures UI before the final display shader, in the same encoding as the HUDless scene. `presented_N.raw` and `presented_real.raw` contain the fitted images after post processing. The manifest identifies render/output/presentation sizes and formats, frame IDs, jitter and camera parameters. Use its format fields when decoding raw channel order.
 
 Analyze a capture with `python tools/windows/analyze_fg_guides.py <capture-folder>/frame_<serial>`. Other scripts analyze PresentMon CSVs, Reflex logs and process-memory CSVs; use their `--help` for accepted formats.
 
+`BB_RENDER_RES` and `BB_OUTPUT_RES` are paired diagnostic overrides. Keep the
+configured `output_res` consistent with that output when using them: startup HUD
+assets are generated from the configuration. Normal launcher and Insert-menu
+resolution choices already use the same configuration.
+
 ## Validation and package
 
-Compilation, CPU regression tests, shader validation and isolated launcher-widget checks are complemented by Windows gameplay tests on a native ultrawide desktop at about 120 Hz. Matched 150 second comparisons show DLSS 2x pacing near 120 displayed FPS through independent flip with a display p99 around 9 ms, and a CPU-owned pad-sample-to-present interval of about 33 ms with Reflex On versus about 48 ms with Reflex Off (about 40 ms with driver-only pacing). A one-hour FSR run and a limited encounter, death and reload gameplay run held private memory and handle counts flat or trending down. These are CPU-side diagnostic intervals and short bounded runs: they do not establish physical input-to-photon latency, multi-hour stability, extended combat, repeated deaths and travel, or variable GPU load. See [GPU validation](GPU_VALIDATION.md) for tested conditions and remaining limits.
+Compilation, 68 Python tests, nine native CPU suites, two shader/SPIR-V checks
+and the ABI-2 adapter table pass. Hardware validation distinguishes source cadence
+from displayed cadence, and CPU pad-sample-to-present diagnostics from physical
+input latency. Latest-candidate gameplay, changing-load, memory and recovery
+results are tracked in [GPU validation](GPU_VALIDATION.md). A runtime change
+requires new hardware evidence before it is described as validated.
 
 The package includes the paired ABI-2 `bbport_dlss.dll`, `nvngx_dlss.dll`, `nvngx_dlssg.dll`, existing FSR assets, diagnostic tools and license notices. NVIDIA SDK terms, original MIT bridge notices and GPL-3.0 notices for adapted bbhost code are retained.
