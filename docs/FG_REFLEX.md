@@ -31,7 +31,7 @@ frame-rate cap, it tightens to one to reduce queued latency. Eight consecutive p
 more than 3% slower restore two, keeping the GPU fed under heavier load. Missing
 generation, discontinuities and cap changes reset that history. Capacity changes retain
 accepted tickets and retirement history. `BB_REFLEX_MAX_QUEUED` overrides the adaptive
-policy in the range 0ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“4; zero disables the application gate.
+policy in the range 0-4; zero disables the application gate.
 
 Simulation advances at each accepted application-frame boundary, even when the guest
 does not poll input. For EOP flips, IRQ registration and all graphics command-buffer
@@ -103,9 +103,18 @@ configured `output_res` consistent with that output when using them: startup HUD
 assets are generated from the configuration. Normal launcher and Insert-menu
 resolution choices already use the same configuration.
 
+At non-16:9 output sizes, native-resolution scene targets must differ from the
+UI viewport so that the existing renderer can distinguish scene and menu passes.
+Off and Native AA request a guest scene target four pixels narrower and two
+pixels shorter than the output, then compose at the requested output size.
+The SDK guide allocation can round that requested height up. Native AA retains its
+native-AA SDK mode. This adjustment does not apply to TAA, whose current path
+requires identical input and output dimensions; the existing non-16:9 TAA menu
+aliasing remains a known limitation.
+
 ## Validation and package
 
-Compilation, 68 Python tests, nine native CPU suites, two shader/SPIR-V checks
+Compilation, 70 Python tests, nine native CPU suites, two shader/SPIR-V checks
 and the ABI-2 adapter table pass. Hardware validation distinguishes source cadence
 from displayed cadence, and CPU pad-sample-to-present diagnostics from physical
 input latency. Latest-candidate gameplay, changing-load, memory and recovery

@@ -13,8 +13,8 @@ latency.
 The core pacing, latency and endurance results below used runtime commit
 `0a1ffa3`, probe SHA-256 prefix `295d3c67`. The integration build at `e09ff36`
 (probe `36999455`) incorporates Windows v1.7.5, including its HUD layer and
-launcher updates. Its focused regressions are being collected separately; the
-older hour-long runs are evidence for their exact executable, not this rebuild.
+launcher updates. Its focused regressions are recorded separately below; the older hour-long runs
+are evidence for their exact executable, not this rebuild.
 The frame-generation queue and cadence algorithms are unchanged by the merge.
 
 Reflex On is the recommended tested mode. Twelve of thirteen bounded cases
@@ -162,7 +162,11 @@ to generation.
 The integrated executable retains the core binary from `e09ff36` (probe
 `36999455`). The launcher-script follow-up `bc194dd` changes only unpatched-game
 UI fallback and whitespace parsing for HUD position; its normal patched 1.09
-path is unchanged. CPU checks pass: 68 Python tests (one optional game-dump check
+path is unchanged. The script-only follow-up `7551c8b` separates native scene
+targets from non-16:9 UI viewports, preventing inventory atlas corruption with
+upscaling Off and Native AA. It preserves the requested output and SDK native-AA
+mode, with a four-by-two pixel input adjustment. TAA retains its exact-size
+contract and its existing non-16:9 menu aliasing limitation. CPU checks pass: 70 Python tests (one optional game-dump check
 skipped), nine native suites, two shader/SPIR-V checks and the ABI-2 adapter
 table. Frozen launcher graphics-control checks pass too.
 
@@ -193,8 +197,18 @@ changes fitted to the native desktop, not a change to the physical display mode.
 No measured phase contained expired slots or a backlog timeout; FSR had one
 expired slot during a provider transition. The nine integrated cases pass their
 original criteria. Two interrupted FSR attempts remain excluded and preserved.
-Final installed-build UI and smoke checks are pending. No hour-long memory run
-has been repeated on this integrated executable.
+Three 135 s automatic-resolution checks on the installed package verified clean
+inventories and output-space Insert overlays with upscaling Off at a custom
+ultrawide output, Off at the named 32:9 preset with edge-positioned HUD, and DLSS
+Native AA with 2x generation. The Native AA case retained SDK quality 0 / preset 0
+and active generation. These used the script fix `7551c8b`, whose changes do not
+affect the earlier Balanced/preset or 16:9 changing-load cases. Two final 150 s runs from the actual installed stripped executable also passed.
+DLSS measured 119.95 displayed FPS / 8.375 ms p99; FSR measured 120.01 FPS /
+8.375 ms p99 in the post-120 s measurement windows. Both held about 60 source
+FPS, a 2.00 presented/source ratio, full foreground ownership, an adaptive gate
+settled at one and no gate timeouts or skipped slots in the measured tail.
+Their output captures were visually inspected. No hour-long memory run has been
+repeated on this integrated executable.
 
 The Reflex comparisons measure the whole implemented mode, meaning driver pacing
 plus the bounded accepted-source gate, rather than the isolated vendor Reflex
