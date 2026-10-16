@@ -970,37 +970,7 @@ class Launcher:
         f = self.scrolled_page('graphics', _('Graphics', 'Графика'),
                                _('Stored in bbport.ini; the in-game menu (Insert or L3+R3) changes the same values.',
                                  'Хранится в bbport.ini; в игре меняется через меню (Insert или L3+R3).'))
-        self.section(f, _('Frame generation & Reflex', 'Генерация кадров и Reflex'), top=4)
-        backend_box = self.choice(f, 'fg_backend', 'ini', FG_BACKENDS)
-        self.row(f, _('Generation backend', 'Бэкенд генерации'), backend_box,
-                 _('Select DLSS or FSR frame generation independently from temporal reconstruction.',
-                   'Выбор генерации кадров DLSS или FSR отдельно от реконструкции.'))
-
-        fg_var = self.var('frame_generation', 'ini')
-        fg_box = self.choice(f, 'frame_generation', 'ini',
-                             FG_MODES_DLSS if self.var('fg_backend', 'ini').get() == 'dlss' else FG_MODES_FSR)
-        self.row(f, _('Frame generation', 'Генерация кадров'), fg_box,
-                 _('DLSS supports Off/2x/3x/4x; FSR supports Off/2x only. Hardware support required; applies on restart.',
-                   'DLSS поддерживает Off/2x/3x/4x; FSR только Off/2x. Требуется поддержка оборудования; применится после перезапуска.'))
-
-        def on_backend_change(*_args):
-            b = self.var('fg_backend', 'ini').get()
-            modes = FG_MODES_DLSS if b == 'dlss' else FG_MODES_FSR
-            values = [v for v, _t in modes]
-            fg_box.bbport_values = values
-            fg_box.configure(values=[_(*t) for _v, t in modes])
-            if fg_var.get() not in values:
-                fg_var.set('2x' if fg_var.get() in ('3x', '4x') else values[0])
-            if fg_var.get() in values:
-                fg_box.current(values.index(fg_var.get()))
-
-        self.var('fg_backend', 'ini').trace_add('write', on_backend_change)
-
-        self.row(f, _('NVIDIA Reflex', 'NVIDIA Reflex'), self.choice(f, 'reflex', 'ini', REFLEX_MODES),
-                 _('Reduces latency with frame generation. Guarded by runtime capability; applies on restart.',
-                   'Снижает задержку при генерации кадров. Применяется после перезапуска.'))
-
-        self.section(f, _('Upscaling', 'Апскейлинг'), top=12)
+        self.section(f, _('Upscaling', 'Апскейлинг'), top=4)
         self.row(f, _('Upscaler', 'Апскейлер'), self.choice(f, 'upscaler', 'ini', UPSCALERS),
                  _("Temporal upscaling with the game's own motion vectors. FSR 4 needs its assets (below) and "
                    'a GPU with INT8 dot products; otherwise the game falls back to FSR 3.1 by itself.',
@@ -1035,6 +1005,36 @@ class Launcher:
         self.check(f, 'object_motion', 'ini', _('Object motion vectors', 'Векторы движения объектов'),
                    _('Less ghosting on characters, cloth and weapons; costs about 10% FPS.',
                      'Меньше гостинга на персонажах и одежде; стоит около 10% FPS.'))
+        self.section(f, _('Frame generation & Reflex', 'Генерация кадров и Reflex'), top=12)
+        backend_box = self.choice(f, 'fg_backend', 'ini', FG_BACKENDS)
+        self.row(f, _('Generation backend', 'Бэкенд генерации'), backend_box,
+                 _('Select DLSS or FSR frame generation independently from temporal reconstruction.',
+                   'Выбор генерации кадров DLSS или FSR отдельно от реконструкции.'))
+
+        fg_var = self.var('frame_generation', 'ini')
+        fg_box = self.choice(f, 'frame_generation', 'ini',
+                             FG_MODES_DLSS if self.var('fg_backend', 'ini').get() == 'dlss' else FG_MODES_FSR)
+        self.row(f, _('Frame generation', 'Генерация кадров'), fg_box,
+                 _('DLSS supports Off/2x/3x/4x; FSR supports Off/2x only. Hardware support required; applies on restart.',
+                   'DLSS поддерживает Off/2x/3x/4x; FSR только Off/2x. Требуется поддержка оборудования; применится после перезапуска.'))
+
+        def on_backend_change(*_args):
+            b = self.var('fg_backend', 'ini').get()
+            modes = FG_MODES_DLSS if b == 'dlss' else FG_MODES_FSR
+            values = [v for v, _t in modes]
+            fg_box.bbport_values = values
+            fg_box.configure(values=[_(*t) for _v, t in modes])
+            if fg_var.get() not in values:
+                fg_var.set('2x' if fg_var.get() in ('3x', '4x') else values[0])
+            if fg_var.get() in values:
+                fg_box.current(values.index(fg_var.get()))
+
+        self.var('fg_backend', 'ini').trace_add('write', on_backend_change)
+
+        self.row(f, _('NVIDIA Reflex', 'NVIDIA Reflex'), self.choice(f, 'reflex', 'ini', REFLEX_MODES),
+                 _('Reduces latency with frame generation. Guarded by runtime capability; applies on restart.',
+                   'Снижает задержку при генерации кадров. Применяется после перезапуска.'))
+
         self.section(f, _('FSR 4 assets', 'Ассеты FSR 4'))
         self.fsr4_label = ttk.Label(f, text='', wraplength=self.px(640), justify='left')
         self.fsr4_label.grid(row=self.next_row(f), column=0, columnspan=2, sticky='w')

@@ -190,78 +190,6 @@ void Menu() {
         }
     }
 
-    ImGui::SeparatorText("Frame generation & Reflex");
-    static const char* fg_backends[] = {"DLSS Frame Generation", "FSR Frame Generation"};
-    int current_fg_backend = s.fg_backend;
-    if (ImGui::BeginCombo("Generation backend", fg_backends[current_fg_backend])) {
-        for (int i = 0; i < BbSettings::FgBackendCount; ++i) {
-            if (ImGui::Selectable(fg_backends[i], i == current_fg_backend)) {
-                Store(s.fg_backend, i, true);
-                if (i == BbSettings::FgFsr && s.frame_generation > 2) {
-                    Store(s.frame_generation, 2, true);
-                }
-            }
-        }
-        ImGui::EndCombo();
-    }
-    Hint("Frame generation generates intermediate frames to increase display motion rate. Hardware support required.");
-
-    const bool is_dlss_backend = s.fg_backend == BbSettings::FgDlss;
-    static const char* dlss_fg_modes[] = {"Off", "2x", "3x", "4x"};
-    static constexpr int dlss_fg_values[] = {0, 2, 3, 4};
-    static const char* fsr_fg_modes[] = {"Off", "2x"};
-    static constexpr int fsr_fg_values[] = {0, 2};
-
-    int current_fg = s.frame_generation;
-    const char* current_fg_label = "Off";
-    if (is_dlss_backend) {
-        for (int i = 0; i < 4; ++i) {
-            if (dlss_fg_values[i] == current_fg) current_fg_label = dlss_fg_modes[i];
-        }
-    } else {
-        for (int i = 0; i < 2; ++i) {
-            if (fsr_fg_values[i] == current_fg) current_fg_label = fsr_fg_modes[i];
-        }
-    }
-
-    if (ImGui::BeginCombo("Frame generation", current_fg_label)) {
-        if (is_dlss_backend) {
-            for (int i = 0; i < 4; ++i) {
-                if (ImGui::Selectable(dlss_fg_modes[i], dlss_fg_values[i] == current_fg)) {
-                    Store(s.frame_generation, dlss_fg_values[i], true);
-                }
-            }
-        } else {
-            for (int i = 0; i < 2; ++i) {
-                if (ImGui::Selectable(fsr_fg_modes[i], fsr_fg_values[i] == current_fg)) {
-                    Store(s.frame_generation, fsr_fg_values[i], true);
-                }
-            }
-        }
-        ImGui::EndCombo();
-    }
-    Hint("DLSS FG supports Off, 2x, 3x, 4x. FSR FG supports Off and 2x only. Changes apply after restarting the game.");
-
-    static const char* reflex_modes[] = {"Off", "On", "On + Boost"};
-    int current_reflex = s.reflex;
-    const bool reflex_avail = s.reflex_supported.load();
-    ImGui::BeginDisabled(!reflex_avail);
-    if (ImGui::BeginCombo("NVIDIA Reflex", reflex_modes[current_reflex])) {
-        for (int i = 0; i < BbSettings::ReflexModeCount; ++i) {
-            if (ImGui::Selectable(reflex_modes[i], i == current_reflex)) {
-                Store(s.reflex, i, true);
-            }
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::EndDisabled();
-    if (!reflex_avail) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("- unsupported by runtime");
-    }
-    Hint("Reduces latency during frame generation and rendering. Changes apply after restarting the game.");
-    ImGui::Spacing();
-
     ImGui::SeparatorText("Temporal upscaling");
     static const char* upscalers[] = {"Off", "FSR 3.1", "FSR 4 (INT8)", "FSR 4.1.1 (INT8)",
                                      "TAA (native anti-aliasing)", "DLSS (NVIDIA RTX)"};
@@ -423,6 +351,78 @@ void Menu() {
         ImGui::EndCombo();
     }
     Hint("On: output and presets change without restarting, while game post-processing stays at 1080p. Off: the scene is patched to the preset resolution at startup. Auto enables the live path on capable discrete GPUs. Changes apply after restarting the game.");
+    ImGui::SeparatorText("Frame generation & Reflex");
+    static const char* fg_backends[] = {"DLSS Frame Generation", "FSR Frame Generation"};
+    int current_fg_backend = s.fg_backend;
+    if (ImGui::BeginCombo("Generation backend", fg_backends[current_fg_backend])) {
+        for (int i = 0; i < BbSettings::FgBackendCount; ++i) {
+            if (ImGui::Selectable(fg_backends[i], i == current_fg_backend)) {
+                Store(s.fg_backend, i, true);
+                if (i == BbSettings::FgFsr && s.frame_generation > 2) {
+                    Store(s.frame_generation, 2, true);
+                }
+            }
+        }
+        ImGui::EndCombo();
+    }
+    Hint("Frame generation generates intermediate frames to increase display motion rate. Hardware support required.");
+
+    const bool is_dlss_backend = s.fg_backend == BbSettings::FgDlss;
+    static const char* dlss_fg_modes[] = {"Off", "2x", "3x", "4x"};
+    static constexpr int dlss_fg_values[] = {0, 2, 3, 4};
+    static const char* fsr_fg_modes[] = {"Off", "2x"};
+    static constexpr int fsr_fg_values[] = {0, 2};
+
+    int current_fg = s.frame_generation;
+    const char* current_fg_label = "Off";
+    if (is_dlss_backend) {
+        for (int i = 0; i < 4; ++i) {
+            if (dlss_fg_values[i] == current_fg) current_fg_label = dlss_fg_modes[i];
+        }
+    } else {
+        for (int i = 0; i < 2; ++i) {
+            if (fsr_fg_values[i] == current_fg) current_fg_label = fsr_fg_modes[i];
+        }
+    }
+
+    if (ImGui::BeginCombo("Frame generation", current_fg_label)) {
+        if (is_dlss_backend) {
+            for (int i = 0; i < 4; ++i) {
+                if (ImGui::Selectable(dlss_fg_modes[i], dlss_fg_values[i] == current_fg)) {
+                    Store(s.frame_generation, dlss_fg_values[i], true);
+                }
+            }
+        } else {
+            for (int i = 0; i < 2; ++i) {
+                if (ImGui::Selectable(fsr_fg_modes[i], fsr_fg_values[i] == current_fg)) {
+                    Store(s.frame_generation, fsr_fg_values[i], true);
+                }
+            }
+        }
+        ImGui::EndCombo();
+    }
+    Hint("DLSS FG supports Off, 2x, 3x, 4x. FSR FG supports Off and 2x only. Changes apply after restarting the game.");
+
+    static const char* reflex_modes[] = {"Off", "On", "On + Boost"};
+    int current_reflex = s.reflex;
+    const bool reflex_avail = s.reflex_supported.load();
+    ImGui::BeginDisabled(!reflex_avail);
+    if (ImGui::BeginCombo("NVIDIA Reflex", reflex_modes[current_reflex])) {
+        for (int i = 0; i < BbSettings::ReflexModeCount; ++i) {
+            if (ImGui::Selectable(reflex_modes[i], i == current_reflex)) {
+                Store(s.reflex, i, true);
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    if (!reflex_avail) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("- unsupported by runtime");
+    }
+    Hint("Reduces latency during frame generation and rendering. Changes apply after restarting the game.");
+    ImGui::Spacing();
+
     ImGui::SeparatorText("Game effects (restart required)");
     static const char* lods[] = {"Highest (-2)", "Original", "Lower (1)", "Lowest (2)"};
     static constexpr int lod_values[] = {-2, 0, 1, 2};
