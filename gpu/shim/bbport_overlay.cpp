@@ -537,7 +537,7 @@ void Menu() {
         BbNeural::Pass& pass = nr.passes[i];
         ImGui::PushID(i);
         char nr_header[32];
-        std::snprintf(nr_header, sizeof(nr_header), "pass %d", i + 1);
+        std::snprintf(nr_header, sizeof(nr_header), "Pass %d", i + 1);
         if (ImGui::CollapsingHeader(nr_header, ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::Checkbox("Enabled", &pass.enabled)) {
                 nr_apply = true;
