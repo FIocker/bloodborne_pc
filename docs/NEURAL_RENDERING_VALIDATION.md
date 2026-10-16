@@ -102,3 +102,27 @@ change. No online multiplayer session or HDR display test was performed.
 The tab styling, shorter labels and custom-hotkey editor were updated in a UI
 follow-up. The gameplay measurements above predate that follow-up; its game
 build, launcher tests and rendered UI were checked without another GPU run.
+
+## Runtime 310.9.16 model presets
+
+The preset follow-up passes 24 launcher tests and native settings checks,
+including all three preset values through save/load, the 310.9.16.0 version
+threshold, old/unknown-runtime fallback and disabled Optimized controls. Both
+Python and native version readers were checked against the installed 310.8 DLL,
+the supplied 310.9.16 DLL, a DLL-file override and a missing runtime.
+
+Four isolated Vulkan readback runs used 256x256 synthetic input, eight evaluations,
+Style 0 and full intensity. All produced finite, nonblack, changed output:
+
+| Runtime / preset | Output SHA-256 |
+| --- | --- |
+| 310.9.16 / Automatic (0) | `21be53566e503783068a3271d1bfdfb9672c975594861e4860c4d63f9543d547` |
+| 310.9.16 / Original (1) | `c32889ed137020b37e731bb5e76b1269cee2522bf2920dde9e74fecf62803e5c` |
+| 310.9.16 / Optimized (2) | `21be53566e503783068a3271d1bfdfb9672c975594861e4860c4d63f9543d547` |
+| 310.8 / Original (1) | `c32889ed137020b37e731bb5e76b1269cee2522bf2920dde9e74fecf62803e5c` |
+
+For this input, Automatic selects the same output as Optimized in the new DLL;
+Original matches the old DLL exactly, and differs from Optimized. This verifies
+model selection and output, not gameplay performance or a general speedup.
+Earlier gameplay and FG results above used runtime 310.8; they were not repeated
+for this preset follow-up. The smoke tool accepts `--preset 0`, `1` or `2`.

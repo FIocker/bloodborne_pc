@@ -33,6 +33,19 @@ std::string ReadFile(const std::filesystem::path &path) {
 
 int main() {
     using namespace BbNeural;
+    assert(!SupportsOptimizedVersion(310, 8, 0, 0));
+    assert(!SupportsOptimizedVersion(310, 9, 15, 99));
+    assert(SupportsOptimizedVersion(310, 9, 16, 0));
+    assert(SupportsOptimizedVersion(311, 0, 0, 0));
+    assert(EffectivePreset(Automatic, false) == Automatic);
+    assert(EffectivePreset(Original, false) == Original);
+    assert(EffectivePreset(Optimized, false) == Original);
+    assert(EffectivePreset(Optimized, true) == Optimized);
+    assert(std::string(PresetName(Automatic)) == "Automatic");
+    assert(std::string(PresetName(Original)) == "Original");
+    assert(std::string(PresetName(Optimized)) == "Optimized");
+    if (const char *expected = std::getenv("BB_NR_EXPECT_OPTIMIZED"))
+        assert(RuntimeSupportsOptimized() == (expected[0] == '1'));
     const auto path =
         std::filesystem::temp_directory_path() /
         ("bb-neural-settings-" +
@@ -124,7 +137,7 @@ int main() {
             for (int s = 0; s < StageCount; ++s) {
                 Config written = Defaults();
                 written.enabled = true;
-                written.preset = 1;
+                written.preset = r;
                 written.input_scale = 0.35f;
                 written.resolve = resolve_values[r];
                 written.ui_correction = false;
@@ -159,7 +172,7 @@ int main() {
                 Set(Defaults());
                 Load(path.string().c_str());
                 const Config read = Snapshot();
-                assert(read.enabled && read.preset == 1);
+                assert(read.enabled && read.preset == r);
                 assert(Near(read.input_scale, 0.35f));
                 assert(read.resolve == resolve_values[r]);
                 assert(!read.ui_correction);
@@ -203,7 +216,7 @@ int main() {
             pass.skin_structure = -9.0f;
         }
         config = Sanitize(config);
-        assert(config.preset == 1);
+        assert(config.preset == Optimized);
         assert(Near(config.input_scale, 1.0f));
         assert(config.resolve == ResolveCount - 1);
         assert(config.pass_count == MaxPasses);

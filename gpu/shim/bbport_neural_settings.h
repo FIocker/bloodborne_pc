@@ -20,6 +20,7 @@ namespace BbNeural {
 constexpr int MaxPasses = 4;
 enum Stage : int { PreUpscale = 0, PostUpscale = 1, Present = 2, StageCount };
 enum Resolve : int { ResolveAuto = 0, ResolveResidual = 1, ResolveRatio = 2, ResolveCount };
+enum Preset : int { Automatic = 0, Original = 1, Optimized = 2, PresetCount };
 enum Style : int { Style0 = 0, Style1 = 1, Style2 = 2, StyleCount };
 
 /// SDL_SCANCODE_KP_MINUS (SDL3 SDL_scancode.h:194). The overlay compares it with SDL_SCANCODE_*.
@@ -47,7 +48,7 @@ struct Pass {
 
 struct Config {
     bool enabled = false;
-    int preset = 0;           ///< 0 Default, 1 Shipping
+    int preset = Automatic;   ///< Automatic / Original / Optimized model
     float input_scale = 1.0f; ///< InputScaleMin..1, 1 is no downsample
     int resolve = ResolveAuto;
     bool ui_correction = true;
@@ -61,6 +62,16 @@ struct Config {
     float white_point = 1.0f;       ///< WhitePointMin..WhitePointMax
     std::array<Pass, MaxPasses> passes{};
 };
+
+/// Optimized is available from model DLL 310.9.16.0. Unknown versions are conservative.
+constexpr bool SupportsOptimizedVersion(unsigned major, unsigned minor, unsigned patch, unsigned build) {
+    return std::array<unsigned, 4>{major, minor, patch, build} >=
+           std::array<unsigned, 4>{310, 9, 16, 0};
+}
+/// Uses BB_NR_RUNTIME, or nvngx_dlssnr.dll beside the renderer. Reads metadata without loading it.
+bool RuntimeSupportsOptimized();
+/// A saved Optimized choice on an old/unknown runtime uses Original without overwriting the setting.
+int EffectivePreset(int preset, bool optimized_available);
 
 Config Defaults();
 /// Every field clamped into its documented range.

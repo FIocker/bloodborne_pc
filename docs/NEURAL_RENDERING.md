@@ -23,12 +23,12 @@ submission; frames pass through while a model warms up. Old features and images
 are released only after completion. Disabling NR does not change the FG factor
 or the game's frame-rate settings.
 
-The initial backend runs on the game's rendering GPU. The GPU section identifies
-that choice; it does not offer companion-GPU offload.
+The initial backend runs on the game's rendering GPU. Companion-GPU
+offload is not supported.
 
 ## Controls
 
-- Shared input/output: Default/Shipping preset hint, input scale, Auto/Residual/
+- Shared input/output: Automatic/Original/Optimized model preset, input scale, Auto/Residual/
   Ratio resolve, UI correction, and the toggle hotkey.
   Use Set… to bind a custom keyboard key or Clear to disable the shortcut;
   keypad minus is the default. Escape cancels key capture.
@@ -42,8 +42,15 @@ that choice; it does not offer companion-GPU offload.
   size. Residual transfers the reconstructed model edit onto the original
   full-size image. Ratio exposes transfer strength, colour strength, maximum
   luminance ratio and white point.
-- Preset hints are requests to the supplied model. A model with one built-in
-  preset can fall back to that preset for either hint.
+- Model presets: **Automatic (0)** uses the installed DLL's default model;
+  **Original (1)** selects the original neural-rendering model; **Optimized (2)**
+  selects the smaller FP8 model and requires NR runtime **310.9.16.0 or newer**.
+  Optimized is disabled for older or unreadable runtime versions. A saved or
+  manually edited preset 2 uses Original on those runtimes without changing the
+  saved choice. Version detection honors `BB_NR_RUNTIME` and reads file metadata
+  without loading the model. Replace a DLL while the game is closed and restart;
+  choosing a model during play recreates the feature at a completed frame boundary.
+  The three NR styles are independent of these model presets.
 - UI correction preserves HUD pixels from the original composition; earlier
   stages already execute before the HUD. The source alpha channel is preserved.
   Frame generation always keeps the HUD separate, including when this switch is
