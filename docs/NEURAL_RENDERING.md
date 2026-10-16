@@ -30,6 +30,8 @@ that choice; it does not offer companion-GPU offload.
 
 - Shared input/output: Default/Shipping preset hint, input scale, Auto/Residual/
   Ratio resolve, UI correction, and the toggle hotkey.
+  Use Set… to bind a custom keyboard key or Clear to disable the shortcut;
+  keypad minus is the default. Escape cancels key capture.
 - Four configurable passes: enabled state, execution point, style, intensity,
   tone, structure, automatic skin mask and skin structure. Within each stage,
   passes retain their list order. Additional passes require more GPU work and
