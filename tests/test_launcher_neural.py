@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('launcher_win', ROOT / 'launcher/bbport_launcher_win.py')
@@ -56,12 +57,33 @@ class LauncherNeuralSettingsTests(unittest.TestCase):
         self.assertEqual([k for k, _ in launcher.NR_RESOLVE], ['auto', 'residual', 'ratio'])
         self.assertEqual([k for k, _ in launcher.NR_STAGES], ['pre', 'post', 'present'])
         self.assertEqual([k for k, _ in launcher.NR_STYLES], ['0', '1', '2'])
-        self.assertEqual([k for k, _ in launcher.NR_HOTKEYS], ['86', '87', '0'])
         self.assertEqual(launcher.NR_PASS_COUNT, 4)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows launcher keyboard mapping')
+    def test_hotkey_codes_use_sdl_keyboard_mapping(self):
+        try:
+            launcher.nr_keyboard()
+        except OSError:
+            self.skipTest('SDL3.dll is not available in this source-test environment')
+        for key, code in (('F6', 63), ('KP_Subtract', 86), ('Control_R', 228),
+                          ('semicolon', 51), ('F24', 115)):
+            with self.subTest(key=key):
+                self.assertEqual(launcher.nr_scancode(key), code)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows physical keyboard mapping')
+    def test_hotkey_uses_physical_key_on_non_us_layout(self):
+        try:
+            launcher.nr_keyboard()
+        except OSError:
+            self.skipTest('SDL3.dll is not available in this source-test environment')
+        # German Z occupies the US Y position. Store the physical SDL Y scancode,
+        # which is what the game's key event reports, rather than the Z glyph.
+        with mock.patch.object(launcher.ctypes.windll.user32, 'MapVirtualKeyW', return_value=0x15):
+            self.assertEqual(launcher.nr_scancode('z', 0x5a), 28)
 
     def test_pass_chain_is_tabs_not_four_cards(self):
         source = inspect.getsource(launcher.Launcher.build_graphics)
-        self.assertIn('self.nr_tabs = ttk.Notebook(holder)', source)
+        self.assertIn("self.nr_tabs = ttk.Notebook(holder, style='Neural.TNotebook')", source)
         self.assertIn('self.nr_add_button', source)
         self.assertIn('self.nr_delete_button', source)
         self.assertIn('self.nr_rebuild_tabs()', source)
@@ -183,7 +205,7 @@ class LauncherNeuralSettingsTests(unittest.TestCase):
 
 
 class PassChainWidgetTests(unittest.TestCase):
-    """Build the real PASS tab widgets in a withdrawn Tk root (no window is shown)."""
+    """Build the real pass tab widgets in a withdrawn Tk root (no window is shown)."""
 
     def setUp(self):
         try:
@@ -206,25 +228,26 @@ class PassChainWidgetTests(unittest.TestCase):
         holder = ttk.Frame(self.root)
         window.nr_tabs = ttk.Notebook(holder)
         window.nr_tabs.pack(side='top', fill='x')
-        window.nr_add_button = ttk.Button(holder, text='+ Add PASS', command=window.nr_add_pass)
-        window.nr_delete_button = ttk.Button(holder, text='Delete current PASS',
+        window.nr_add_button = ttk.Button(holder, text='+ Add pass', command=window.nr_add_pass)
+        window.nr_delete_button = ttk.Button(holder, text='Delete current pass',
                                              command=window.nr_delete_pass)
         window.nr_count_label = ttk.Label(holder, text='')
         self.window = window
 
     def tearDown(self):
         if getattr(self, 'root', None) is not None:
+            self.root.update_idletasks()
             self.root.destroy()
 
     def test_tabs_follow_add_delete_and_keep_shifted_values(self):
         w = self.window
         w.nr_rebuild_tabs()
         self.assertEqual(len(w.nr_tabs.tabs()), 1)
-        self.assertEqual(w.nr_tabs.tab(0, 'text'), 'PASS 1')
+        self.assertEqual(w.nr_tabs.tab(0, 'text'), 'pass 1')
         w.nr_add_pass()
         self.assertEqual(len(w.nr_tabs.tabs()), 2)
         self.assertEqual(w.var('nr_passes', 'ini').get(), '2')
-        self.assertEqual(w.nr_tabs.tab(1, 'text'), 'PASS 2')
+        self.assertEqual(w.nr_tabs.tab(1, 'text'), 'pass 2')
         self.assertEqual(w.nr_tabs.index(w.nr_tabs.select()), 1)  # the new tab is selected
         # Edit pass 2, then delete pass 1: the edit moves up with the pass.
         w.var('nr_pass2_intensity', 'ini').set(0.4)
@@ -263,7 +286,7 @@ class PassChainWidgetTests(unittest.TestCase):
         w.fsr4_label = w.fsr4_button = w.fsr4_progress = None
         w.build_graphics()
         self.assertEqual(len(w.nr_tabs.tabs()), 1)
-        self.assertEqual(w.nr_tabs.tab(0, 'text'), 'PASS 1')
+        self.assertEqual(w.nr_tabs.tab(0, 'text'), 'pass 1')
         w.nr_add_pass()
         w.nr_add_pass()
         self.assertEqual(len(w.nr_tabs.tabs()), 3)
@@ -277,6 +300,53 @@ class PassChainWidgetTests(unittest.TestCase):
         self.assertAlmostEqual(min(float(scale['from']) for scale in scales), launcher.NR_SKIN_MIN)
         self.assertAlmostEqual(max(float(scale['to']) for scale in scales), launcher.NR_WHITE_POINT[1])
         self.assertTrue(any(float(scale['to']) == launcher.NR_MAX_RATIO[1] for scale in scales))
+
+    def test_pass_tab_colors_match_the_action_buttons(self):
+        w = self.window
+        w.style()
+        style = w.ttk.Style(self.root)
+        for option in ('background', 'foreground'):
+            self.assertEqual(style.lookup('Neural.TNotebook.Tab', option, ('selected',)),
+                             style.lookup('NeuralAdd.TButton', option))
+            self.assertEqual(style.lookup('Neural.TNotebook.Tab', option),
+                             style.lookup('NeuralDelete.TButton', option))
+
+    def test_custom_hotkey_capture_clear_and_escape(self):
+        w = self.window
+        w.content = w.ttk.Frame(self.root)
+        w.content.pack(fill='both', expand=True)
+        w.pages = {}
+        w.build_graphics()
+        self.root.deiconify()
+        self.root.update()
+        self.root.focus_force()
+        self.root.update()
+        self.assertEqual(w.var('nr_hotkey', 'ini').get(), '86')
+        # Capture a key using the same Tk event path as a real Set… press.
+        with mock.patch.object(launcher, 'nr_scancode', return_value=63) as convert:
+            w.start_nr_hotkey_capture()
+            self.root.event_generate('<KeyPress-F6>')
+            self.root.update()
+            convert.assert_called_once()
+        self.assertEqual(w.var('nr_hotkey', 'ini').get(), '63')
+        self.assertNotIn('disabled', w.nr_hotkey_button.state())
+        w.start_nr_hotkey_capture()
+        self.root.event_generate('<KeyPress-Escape>')
+        self.root.update()
+        self.assertEqual(w.var('nr_hotkey', 'ini').get(), '63')
+        w.start_nr_hotkey_capture()
+        w.clear_nr_hotkey()
+        self.assertEqual(w.var('nr_hotkey', 'ini').get(), '0')
+        self.assertEqual(w.nr_hotkey_label.cget('text'), '(none)')
+        self.assertIsNone(self.root.grab_current())
+
+    def test_custom_hotkey_is_kept_when_graphics_opens(self):
+        w = self.window
+        w.ini['nr_hotkey'] = '63'
+        w.content = w.ttk.Frame(self.root)
+        w.pages = {}
+        w.build_graphics()
+        self.assertEqual(w.var('nr_hotkey', 'ini').get(), '63')
 
     def scales_of(self, widget):
         """Every ttk.Scale below `widget`, as {from, to} strings."""

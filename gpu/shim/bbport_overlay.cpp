@@ -71,6 +71,7 @@ struct NeuralEditor {
     bool staged = false; // a slider was moved: not committed yet
 };
 NeuralEditor neural;
+bool nr_key_capture = false;
 
 /// Applies a staged slider edit (called when the menu closes).
 void CommitNeural() {
@@ -88,6 +89,7 @@ void SetOpen(bool value) {
     }
     ImGui::GetIO().MouseDrawCursor = value;
     if (!value) {
+        nr_key_capture = false;
         CommitNeural(); // a slider moved and not released is still saved
         neural.valid = false;
         if (dirty) {
@@ -459,7 +461,7 @@ void Menu() {
         const std::string nr_status = BbNeural::Status();
         ImGui::TextDisabled("Status: %s", nr_status.empty() ? "Disabled" : nr_status.c_str());
     }
-    if (ImGui::Checkbox("Enable neural rendering (DLSS NR)", &nr.enabled)) {
+    if (ImGui::Checkbox("Enable neural rendering (DLSS NR); applies on restart", &nr.enabled)) {
         nr_apply = true;
     }
     Hint("Enabling the feature from a fully disabled start requires restarting the game: the renderer allocates the neural extensions at startup. Afterwards the toggle hotkey switches it on and off live.");
@@ -496,22 +498,16 @@ void Menu() {
         nr_apply = true;
     }
     Hint("Preserves the original HUD during Present passes. Frame generation always uses this protection; earlier stages already run before the HUD.");
-    static const char* nr_hotkeys[] = {"Keypad minus", "Keypad plus", "Disabled"};
-    static constexpr int nr_hotkey_values[] = {SDL_SCANCODE_KP_MINUS, SDL_SCANCODE_KP_PLUS, 0};
-    int nr_hotkey = 2;
-    for (int i = 0; i < 3; ++i) {
-        if (nr_hotkey_values[i] == nr.hotkey) {
-            nr_hotkey = i;
-        }
-    }
-    if (ImGui::BeginCombo("NR toggle hotkey", nr_hotkeys[nr_hotkey])) {
-        for (int i = 0; i < 3; ++i) {
-            if (ImGui::Selectable(nr_hotkeys[i], i == nr_hotkey)) {
-                nr.hotkey = nr_hotkey_values[i];
-                nr_apply = true;
-            }
-        }
-        ImGui::EndCombo();
+    const char* nr_key_name = nr.hotkey == SDL_SCANCODE_KP_MINUS ? "Keypad minus" :
+        nr.hotkey ? SDL_GetScancodeName(SDL_Scancode(nr.hotkey)) : "(none)";
+    ImGui::Text("NR toggle hotkey: %s", nr_key_capture ? "Press a key (Escape cancels)" : nr_key_name);
+    ImGui::SameLine();
+    if (ImGui::Button("Set...##nr_hotkey")) nr_key_capture = true;
+    ImGui::SameLine();
+    if (ImGui::Button("Clear##nr_hotkey")) {
+        nr_key_capture = false;
+        nr.hotkey = 0;
+        nr_apply = true;
     }
     Hint("Switches neural rendering on and off in game, once the extensions have been initialized at startup.");
     if (nr.resolve == BbNeural::ResolveRatio) {
@@ -541,7 +537,7 @@ void Menu() {
         BbNeural::Pass& pass = nr.passes[i];
         ImGui::PushID(i);
         char nr_header[32];
-        std::snprintf(nr_header, sizeof(nr_header), "PASS %d", i + 1);
+        std::snprintf(nr_header, sizeof(nr_header), "pass %d", i + 1);
         if (ImGui::CollapsingHeader(nr_header, ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::Checkbox("Enabled", &pass.enabled)) {
                 nr_apply = true;
@@ -609,8 +605,6 @@ void Menu() {
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::TextDisabled("More passes cost more GPU time");
-    ImGui::TextDisabled("GPU: the game's own Vulkan renderer adapter");
-    Hint("Neural rendering runs on the adapter the Vulkan renderer already uses; the port has no separate GPU selection.");
     if (nr_apply) {
         neural.staged = false;
         BbNeural::Set(nr);
@@ -850,6 +844,18 @@ bool HandleEvent(const SDL_Event& event) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
         const bool down = event.type == SDL_EVENT_KEY_DOWN;
+        if (nr_key_capture && down && !event.key.repeat) {
+            if (event.key.key == SDLK_ESCAPE) {
+                nr_key_capture = false;
+            } else if (event.key.key != SDLK_INSERT && event.key.key != SDLK_F9 &&
+                       event.key.scancode != SDL_SCANCODE_UNKNOWN) {
+                neural.config.hotkey = event.key.scancode;
+                neural.staged = true;
+                CommitNeural();
+                nr_key_capture = false;
+            }
+            return true;
+        }
         if (down && !event.key.repeat &&
             (event.key.key == SDLK_INSERT || (is_open && event.key.key == SDLK_ESCAPE))) {
             SetOpen(event.key.key == SDLK_INSERT ? !is_open : false);

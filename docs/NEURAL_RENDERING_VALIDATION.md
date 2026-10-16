@@ -84,8 +84,9 @@ NR has a separate ABI-1 adapter.
 
 - CLANG64 game build and separate MSVC NR adapter/smoke build pass.
 - 69 existing focused Python tests pass, with one platform-related skip.
-- 17 new launcher tests pass, including construction of the Graphics page and
-  pass-tab add/delete controls in a withdrawn Tk window.
+- 22 new launcher tests pass, including construction of the Graphics page,
+  pass-tab add/delete controls and colors, custom hotkey capture/clear/cancel,
+  saved bindings and physical key mapping on non-US layouts.
 - 19 shader-math reference tests pass, including actual GLSL matrix orientation,
   published OkLab colour values, residual interpolation, transfer-zero identity,
   white-point normalization and finite HDR math.
@@ -97,3 +98,7 @@ NR has a separate ABI-1 adapter.
 Broad cross-platform test discovery is not claimed green: the known Windows
 environment limitations recorded for the base integration remain outside this
 change. No online multiplayer session or HDR display test was performed.
+
+The tab styling, shorter labels and custom-hotkey editor were updated in a UI
+follow-up. The gameplay measurements above predate that follow-up; its game
+build, launcher tests and rendered UI were checked without another GPU run.

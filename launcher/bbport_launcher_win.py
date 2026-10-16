@@ -331,7 +331,85 @@ NR_RESOLVE = [('auto', ('Auto (1:1 at a 100% input scale)',)),
               ('ratio', ('Ratio (luma-ratio resolve)',))]
 NR_STAGES = [('pre', ('Pre-upscale',)), ('post', ('Post-upscale',)), ('present', ('Present',))]
 NR_STYLES = [('0', ('Style 0',)), ('1', ('Style 1',)), ('2', ('Style 2 (default)',))]
-NR_HOTKEYS = [('86', ('Keypad minus',)), ('87', ('Keypad plus',)), ('0', ('Disabled',))]
+_nr_sdl = None
+# Windows set-1 positions of printable keys. Translate the physical position rather than
+# the layout's glyph: e.g. German Z/Y must bind the key that was actually pressed.
+NR_SCAN_NAMES = {**dict(zip(range(0x10, 0x1a), 'QWERTYUIOP')),
+                 **dict(zip(range(0x1e, 0x27), 'ASDFGHJKL')),
+                 **dict(zip(range(0x2c, 0x33), 'ZXCVBNM')),
+                 **dict(zip(range(0x02, 0x0c), '1234567890')),
+                 0x0c: '-', 0x0d: '=', 0x1a: '[', 0x1b: ']', 0x27: ';',
+                 0x28: "'", 0x29: '`', 0x2b: '\\', 0x33: ',', 0x34: '.', 0x35: '/'}
+
+
+def nr_keyboard():
+    """Use SDL's own key names/scancodes, without initializing video or the GPU."""
+    global _nr_sdl
+    if _nr_sdl is None:
+        path = PORT_DIR / 'bin' / 'SDL3.dll'
+        if not path.is_file():
+            path = next((Path(folder) / 'SDL3.dll' for folder in os.get_exec_path()
+                         if (Path(folder) / 'SDL3.dll').is_file()), path)
+        library = ctypes.CDLL(str(path))
+        library.SDL_GetScancodeFromName.argtypes = [ctypes.c_char_p]
+        library.SDL_GetScancodeFromName.restype = ctypes.c_int
+        library.SDL_GetScancodeName.argtypes = [ctypes.c_int]
+        library.SDL_GetScancodeName.restype = ctypes.c_char_p
+        _nr_sdl = library
+    return _nr_sdl
+
+
+def nr_scancode(keysym, keycode=None):
+    if os.name == 'nt' and keycode is not None:
+        scan = ctypes.windll.user32.MapVirtualKeyW(int(keycode), 4)
+        if scan in NR_SCAN_NAMES:
+            return nr_keyboard().SDL_GetScancodeFromName(NR_SCAN_NAMES[scan].encode('ascii'))
+    name = keysym_to_name(keysym)
+    aliases = {'enter': 'Return', 'pgup': 'PageUp', 'pgdown': 'PageDown',
+               'lshift': 'Left Shift', 'rshift': 'Right Shift', 'lctrl': 'Left Ctrl',
+               'rctrl': 'Right Ctrl', 'lalt': 'Left Alt', 'ralt': 'Right Alt',
+               'lwin': 'Left GUI', 'rwin': 'Right GUI', 'lmeta': 'Left GUI', 'rmeta': 'Right GUI',
+               'kpperiod': 'Keypad .', 'kpcomma': 'Keypad ,', 'kpslash': 'Keypad /',
+               'kpasterisk': 'Keypad *', 'kpminus': 'Keypad -', 'kpplus': 'Keypad +',
+               'kpequals': 'Keypad =', 'kpenter': 'Keypad Enter', 'grave': '`', 'minus': '-',
+               'equals': '=', 'lbracket': '[', 'rbracket': ']', 'backslash': '\\',
+               'semicolon': ';', 'apostrophe': "'", 'comma': ',', 'period': '.', 'slash': '/',
+               'pausebreak': 'Pause'}
+    if name and re.fullmatch(r'kp\d', name):
+        name = 'Keypad ' + name[-1]
+    elif name:
+        name = aliases.get(name, name)
+    elif re.fullmatch(r'F(?:1\d|2[0-4])', keysym):
+        name = keysym
+    if not name:
+        return 0
+    return nr_keyboard().SDL_GetScancodeFromName(name.encode('utf-8'))
+
+
+def nr_hotkey_name(value):
+    try:
+        code = int(value)
+    except (TypeError, ValueError):
+        code = 0
+    if code == 0:
+        return _('(none)', '(нет)')
+    if code == 86:
+        return _('Keypad minus', 'Минус на цифровой клавиатуре')
+    try:
+        name = nr_keyboard().SDL_GetScancodeName(code)
+        if name:
+            name = name.decode('utf-8')
+            if os.name == 'nt' and name in NR_SCAN_NAMES.values():
+                scan = next(k for k, v in NR_SCAN_NAMES.items() if v == name)
+                vk = ctypes.windll.user32.MapVirtualKeyW(scan, 3)
+                glyph = ctypes.windll.user32.MapVirtualKeyW(vk, 2) & 0x7fffffff
+                if glyph and chr(glyph).isprintable():
+                    return chr(glyph)
+            return name
+    except OSError:
+        pass
+    return _('Key {}', 'Клавиша {}').format(code)
+
 # Slider ranges of the neural pass and of the Ratio resolve. The style parameters are verified at
 # 0..1 and the Ratio shader clamps transfer and colour to 0..1, so a wider slider would do nothing.
 NR_STYLE_MAX = 1.0
@@ -773,6 +851,14 @@ class Launcher:
         s.map('Slot.TButton', background=[('active', LINE), ('disabled', CARD)], foreground=[('disabled', TEXT)])
         s.configure('Listen.TButton', background=LINE, foreground=GOLD, padding=(6, 5), font=('Segoe UI', 9))
         s.map('Listen.TButton', background=[('disabled', LINE)], foreground=[('disabled', GOLD)])
+        s.configure('NeuralAdd.TButton', background=LINE, foreground=TEXT)
+        s.configure('NeuralDelete.TButton', background=CARD, foreground=MUTED)
+        s.configure('Neural.TNotebook', background=PANEL, bordercolor=LINE, tabmargins=(0, 0, 0, 0))
+        s.configure('Neural.TNotebook.Tab', background=CARD, foreground=MUTED, bordercolor=LINE,
+                    lightcolor=LINE, darkcolor=LINE, padding=(12, 6))
+        s.map('Neural.TNotebook.Tab', background=[('selected', LINE), ('active', LINE)],
+              foreground=[('selected', TEXT), ('active', TEXT)],
+              lightcolor=[('selected', LINE)], darkcolor=[('selected', LINE)])
         s.configure('Play.TButton', background=BLOOD, foreground='#f4ece0', font=('Georgia', 15, 'bold'),
                     padding=(36, 10), borderwidth=0)
         s.map('Play.TButton', background=[('active', BLOOD_HI), ('disabled', '#3a2420')],
@@ -1155,15 +1241,8 @@ class Launcher:
                    'Снижает задержку при генерации кадров. Применяется после перезапуска.'))
 
         self.section(f, _('Neural rendering', 'Нейронный рендеринг'), top=14)
-        self.note(f, _('DLSS neural rendering (NR). The runtime allocates its extensions at start-up, so '
-                       'enabling it from a disabled start applies after restarting the game; the toggle '
-                       'hotkey then switches it on and off in game. It runs on the graphics card of the '
-                       'Vulkan renderer; the port has no separate GPU choice.',
-                       'Нейронный рендеринг DLSS (NR). Расширения выделяются при запуске, поэтому включение '
-                       'с выключенного старта применится после перезапуска игры; затем горячая клавиша '
-                       'переключает его в игре. Работает на видеокарте Vulkan-рендерера.'), top=2)
-        self.check(f, 'nr_enabled', 'ini', _('Enable neural rendering (DLSS NR)',
-                                             'Включить нейронный рендеринг (DLSS NR)'))
+        self.check(f, 'nr_enabled', 'ini', _('Enable neural rendering (DLSS NR); applies on restart',
+                                             'Включить нейронный рендеринг (DLSS NR); после перезапуска'))
         self.row(f, _('NR preset', 'Пресет NR'), self.choice(f, 'nr_preset', 'ini', NR_PRESETS),
                  _('Network preset hint used when the feature is created. A runtime with one built-in preset may '
                    'use it for either setting.',
@@ -1180,21 +1259,29 @@ class Launcher:
                    'detail. Ratio: the luma-ratio resolve with the advanced controls below.'))
         self.check(f, 'nr_ui_correction', 'ini', _('NR UI correction', 'Коррекция интерфейса NR'),
                    _('Preserves the original HUD during Present passes. Frame generation always keeps HUD protection.'))
-        self.row(f, _('NR toggle hotkey', 'Горячая клавиша NR'),
-                 self.choice(f, 'nr_hotkey', 'ini', NR_HOTKEYS),
-                 _('Switches neural rendering on and off in game, once it has been initialized at start-up.'))
+        hotkey = ttk.Frame(f)
+        self.nr_hotkey_label = ttk.Label(hotkey, width=18, style='Muted.TLabel')
+        self.nr_hotkey_label.pack(side='left')
+        self.nr_hotkey_button = ttk.Button(hotkey, text=_('Set…', 'Назначить…'),
+                                           command=self.start_nr_hotkey_capture)
+        self.nr_hotkey_button.pack(side='left', padx=(10, 4))
+        ttk.Button(hotkey, text=_('Clear', 'Сбросить'), command=self.clear_nr_hotkey).pack(side='left')
+        self.var('nr_hotkey', 'ini').trace_add('write', lambda *_a: self.refresh_nr_hotkey())
+        self.refresh_nr_hotkey()
+        self.row(f, _('NR toggle hotkey', 'Горячая клавиша NR'), hotkey)
         # The pass chain: one tab per active pass, as in the reference overlay. Adding and deleting
         # reshuffles the nr_passN_* values; the widgets read the shared ini variables, so a rebuilt
         # tab shows the moved values.
         holder = ttk.Frame(f)
         holder.grid(row=self.next_row(f), column=0, columnspan=2, sticky='we', pady=(8, 0))
-        self.nr_tabs = ttk.Notebook(holder)
+        self.nr_tabs = ttk.Notebook(holder, style='Neural.TNotebook')
         self.nr_tabs.pack(side='top', fill='x')
         buttons = ttk.Frame(holder)
         buttons.pack(side='top', anchor='w', pady=(6, 0))
-        self.nr_add_button = ttk.Button(buttons, text=_('+ Add PASS'), command=self.nr_add_pass)
+        self.nr_add_button = ttk.Button(buttons, text=_('+ Add pass'), style='NeuralAdd.TButton',
+                                       command=self.nr_add_pass)
         self.nr_add_button.pack(side='left')
-        self.nr_delete_button = ttk.Button(buttons, text=_('Delete current PASS'),
+        self.nr_delete_button = ttk.Button(buttons, text=_('Delete current pass'), style='NeuralDelete.TButton',
                                            command=self.nr_delete_pass)
         self.nr_delete_button.pack(side='left', padx=(8, 0))
         self.nr_count_label = ttk.Label(buttons, text='', style='Muted.TLabel')
@@ -1233,6 +1320,53 @@ class Launcher:
         self.check(f, 'show_fps', 'ini', _('Show the FPS counter', 'Показывать FPS'))
         self.check(f, 'mute_unfocused', 'ini', _('Mute when the game is in the background',
                                                  'Без звука, когда игра в фоне'))
+
+    def refresh_nr_hotkey(self):
+        self.nr_hotkey_label.configure(text=nr_hotkey_name(self.var('nr_hotkey', 'ini').get()))
+
+    def clear_nr_hotkey(self):
+        cancel = getattr(self, '_nr_capture_finish', None)
+        if cancel:
+            cancel()
+        self.var('nr_hotkey', 'ini').set('0')
+
+    def start_nr_hotkey_capture(self):
+        """Controls-style key capture. Escape cancels; Clear disables the shortcut."""
+        self.nr_hotkey_label.configure(text=_('Press a key…', 'Нажмите клавишу…'))
+        self.nr_hotkey_button.configure(state='disabled')
+        self.root.grab_set()
+        self.root.focus_set()
+
+        def finish():
+            self._nr_capture_finish = None
+            self.root.unbind_all('<KeyPress>')
+            self.root.grab_release()
+            self.nr_hotkey_button.configure(state='normal')
+            self.refresh_nr_hotkey()
+
+        def on_key(event):
+            if event.keysym == 'Escape':
+                finish()
+                return 'break'
+            reserved = reserved_keys(getattr(self, 'remap_toggle_key', 'f7'),
+                                     getattr(self, 'remap_reload_key', 'f8'))
+            if keysym_to_name(event.keysym) in reserved:
+                self.nr_hotkey_label.configure(text=_('Reserved; choose another key',
+                                                      'Зарезервировано; выберите другую клавишу'))
+                return 'break'
+            try:
+                code = nr_scancode(event.keysym, event.keycode)
+            except OSError:
+                code = 0
+            if not code:
+                self.nr_hotkey_label.configure(text=_('Choose another key…', 'Выберите другую клавишу…'))
+                return 'break'
+            self.var('nr_hotkey', 'ini').set(str(code))
+            finish()
+            return 'break'
+
+        self._nr_capture_finish = finish
+        self.root.bind_all('<KeyPress>', on_key)
 
     def nr_pass_count(self):
         """The active number of passes (1..NR_PASS_COUNT), from the shared nr_passes setting."""
@@ -1277,7 +1411,7 @@ class Launcher:
         count = self.nr_pass_count()
         for i in range(1, count + 1):
             frame = self.ttk.Frame(self.nr_tabs, padding=(10, 8, 10, 10))
-            self.nr_tabs.add(frame, text=_('PASS {}').format(i))
+            self.nr_tabs.add(frame, text=_('pass {}').format(i))
             self.check(frame, f'nr_pass{i}_enabled', 'ini', _('Enabled'))
             self.row(frame, _('Execution point'),
                      self.choice(frame, f'nr_pass{i}_stage', 'ini', NR_STAGES),
