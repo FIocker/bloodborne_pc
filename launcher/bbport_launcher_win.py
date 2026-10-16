@@ -195,7 +195,7 @@ TWEAKS = [
 # Neural rendering (bbport_neural_settings.h): one nr_* key per setting, written to the same
 # bbport.ini the in-game menu edits. Passes past the pass count are ignored by the game.
 NR_PASS_COUNT = 4
-NR_PASS_DEFAULTS = (('enabled', '1'), ('stage', 'post'), ('style', '2'), ('intensity', '1.00'),
+NR_PASS_DEFAULTS = (('enabled', '1'), ('stage', 'post'), ('style', '0'), ('intensity', '1.00'),
                     ('structure', '1.00'), ('tone', '1.00'), ('auto_skin', '0'), ('skin_structure', '1.00'))
 NR_DEFAULTS = {'nr_enabled': '0', 'nr_preset': '0', 'nr_input_scale': '1.00', 'nr_resolve': 'auto',
                'nr_ui_correction': '1', 'nr_hotkey': '86', 'nr_passes': '1',
@@ -309,7 +309,7 @@ NR_RESOLVE = [('auto', ('Auto (1:1 at a 100% input scale)',)),
               ('residual', ('Residual (Magpie + Lanczos3, low detail)',)),
               ('ratio', ('Ratio (luma-ratio resolve)',))]
 NR_STAGES = [('pre', ('Pre-upscale',)), ('post', ('Post-upscale',)), ('present', ('Present',))]
-NR_STYLES = [('0', ('Style 0',)), ('1', ('Style 1',)), ('2', ('Style 2 (default)',))]
+NR_STYLES = [('0', ('Style 0',)), ('1', ('Style 1',)), ('2', ('Style 2',))]
 _nr_sdl = None
 # Windows set-1 positions of printable keys. Translate the physical position rather than
 # the layout's glyph: e.g. German Z/Y must bind the key that was actually pressed.

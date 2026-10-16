@@ -563,7 +563,7 @@ void Menu() {
                 }
                 ImGui::EndCombo();
             }
-            Hint("Selects the neural rendering style. Style 2 is the default of the feature.");
+            Hint("Selects the neural rendering style.");
             ImGui::SliderFloat("Intensity", &pass.intensity, 0.0f, BbNeural::StyleParamMax, "%.2f");
             if (ImGui::IsItemDeactivatedAfterEdit()) nr_apply = true;
             else if (ImGui::IsItemEdited()) neural.staged = true;

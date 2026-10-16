@@ -34,7 +34,7 @@ class LauncherNeuralSettingsTests(unittest.TestCase):
         for i in range(1, launcher.NR_PASS_COUNT + 1):
             self.assertEqual(launcher.INI_DEFAULTS[f'nr_pass{i}_enabled'], '1')
             self.assertEqual(launcher.INI_DEFAULTS[f'nr_pass{i}_stage'], 'post')
-            self.assertEqual(launcher.INI_DEFAULTS[f'nr_pass{i}_style'], '2')
+            self.assertEqual(launcher.INI_DEFAULTS[f'nr_pass{i}_style'], '0')
             self.assertEqual(launcher.INI_DEFAULTS[f'nr_pass{i}_intensity'], '1.00')
             self.assertEqual(launcher.INI_DEFAULTS[f'nr_pass{i}_structure'], '1.00')
             self.assertEqual(launcher.INI_DEFAULTS[f'nr_pass{i}_tone'], '1.00')
