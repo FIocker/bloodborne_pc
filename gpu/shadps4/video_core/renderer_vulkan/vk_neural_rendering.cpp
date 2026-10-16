@@ -155,6 +155,7 @@ struct NeuralRendering::Impl {
     HMODULE module{};
 #endif
     bool initialized{}, runtime_started{}, failed{}, rebuild{}, frame_reset{};
+    const bool optimized_supported = BbNeural::RuntimeSupportsOptimized();
     u64 frame_serial{};
     struct Pass {
         FgImage input, motion, depth, output, resolved;
@@ -229,9 +230,9 @@ struct NeuralRendering::Impl {
             return false;
         }
         auto runtime = directory;
-        if (const wchar_t *env = _wgetenv(L"BB_NR_RUNTIME")) {
+        if (const wchar_t *env = _wgetenv(L"BB_NR_RUNTIME"); env && *env) {
             runtime = std::filesystem::path(env);
-            if (runtime.extension() == L".dll")
+            if (_wcsicmp(runtime.extension().c_str(), L".dll") == 0)
                 runtime = runtime.parent_path();
         }
         if (!std::filesystem::is_regular_file(runtime / L"nvngx_dlssnr.dll")) {
@@ -451,7 +452,7 @@ bool NeuralRendering::Record(vk::CommandBuffer cmd, int stage, const Color &colo
             const auto &tuning = config.passes[index];
             const BbNrTuning desc{nw,
                                   nh,
-                                  u32(config.preset),
+                                  u32(BbNeural::EffectivePreset(config.preset, s.optimized_supported)),
                                   u32(tuning.style),
                                   tuning.intensity,
                                   tuning.structure,

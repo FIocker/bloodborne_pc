@@ -13,7 +13,7 @@
 // Vulkan is resolved from vulkan-1.dll at run time, so this needs the headers and nothing else.
 //
 //   nr_smoke.exe [--runtime <dir with nvngx_dlssnr.dll>] [--bridge <dir with bbport_nr_nvngx.dll>]
-//                [--size <n>] [--frames <n>] [--style <0..2>] [--intensity <0..1>]
+//                [--size <n>] [--frames <n>] [--preset <0..2>] [--style <0..2>] [--intensity <0..1>]
 //                [--structure <0..1>] [--tone <0..1>] [--auto-skin <0|1>]
 //                [--skin-structure <-1..1>] [--input <raw RGBA16F>] [--allow-identity]
 //
@@ -784,6 +784,7 @@ int main(int argc, char** argv) {
     // The model's tuning, at the runtime's defaults. These are read once at CreatePass, so a smoke
     // run covers exactly one point in the control space; the ranges match BbNeural::Pass, which is
     // what the launcher and the in-game menu write.
+    uint32_t preset = 0;
     uint32_t style = 0;
     float intensity = 1.0f;
     float structure = 1.0f;
@@ -804,6 +805,8 @@ int main(int argc, char** argv) {
             size = static_cast<uint32_t>(std::atoi(argv[++i]));
         } else if (arg == "--frames" && i + 1 < argc) {
             frames = std::atoi(argv[++i]);
+        } else if (arg == "--preset" && i + 1 < argc) {
+            preset = static_cast<uint32_t>(std::atoi(argv[++i]));
         } else if (arg == "--style" && i + 1 < argc) {
             style = static_cast<uint32_t>(std::atoi(argv[++i]));
         } else if (arg == "--intensity" && i + 1 < argc) {
@@ -832,6 +835,10 @@ int main(int argc, char** argv) {
 
     // Refused rather than clamped: a run that silently tests a different value than it was asked to
     // is worse than one that stops, because its verdict is then attributed to the wrong setting.
+    if (preset > 2) {
+        Fail("--preset takes 0 (Automatic), 1 (Original) or 2 (Optimized)");
+        return 2;
+    }
     if (style > 2) {
         Fail("--style takes 0, 1 or 2 (the model's DLSSNR.Style)");
         return 2;
@@ -851,9 +858,9 @@ int main(int argc, char** argv) {
     }
 
     std::printf("[info ] Neural Rendering smoke test, %ux%u, %d evaluations\n", size, size, frames);
-    std::printf("[info ] style %u, intensity %.3f, structure %.3f, tone %.3f, auto-skin %u, "
+    std::printf("[info ] preset %u, style %u, intensity %.3f, structure %.3f, tone %.3f, auto-skin %u, "
                 "skin-structure %.3f\n",
-                style, static_cast<double>(intensity), static_cast<double>(structure),
+                preset, style, static_cast<double>(intensity), static_cast<double>(structure),
                 static_cast<double>(tone), auto_skin, static_cast<double>(skin_structure));
     std::fflush(stdout);
 
@@ -1041,7 +1048,7 @@ int main(int argc, char** argv) {
     BbNrTuning tuning{};
     tuning.width = size;
     tuning.height = size;
-    tuning.preset = 0;
+    tuning.preset = preset;
     tuning.style = style;
     tuning.intensity = intensity;
     tuning.structure = structure;

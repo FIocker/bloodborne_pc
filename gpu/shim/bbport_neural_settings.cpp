@@ -5,7 +5,15 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <mutex>
+#include <vector>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace BbNeural {
 
@@ -129,10 +137,56 @@ bool ApplyKey(Config &config, const std::string &key, const std::string &value) 
 
 } // namespace
 
+bool RuntimeSupportsOptimized() {
+#ifdef _WIN32
+    std::wstring executable(32768, L'\0');
+    const auto count = GetModuleFileNameW(nullptr, executable.data(), DWORD(executable.size()));
+    if (!count || count >= executable.size()) return false;
+    executable.resize(count);
+    auto directory = std::filesystem::path(executable).parent_path();
+    if (const wchar_t *env = _wgetenv(L"BB_NR_RUNTIME"); env && *env) {
+        directory = std::filesystem::path(env);
+        if (_wcsicmp(directory.extension().c_str(), L".dll") == 0) directory = directory.parent_path();
+    }
+    const auto path = directory / L"nvngx_dlssnr.dll";
+    HMODULE library = LoadLibraryExW(L"version.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!library) return false;
+    const auto supported = [&] {
+        const auto size_fn = reinterpret_cast<decltype(&GetFileVersionInfoSizeW)>(
+            GetProcAddress(library, "GetFileVersionInfoSizeW"));
+        const auto info_fn = reinterpret_cast<decltype(&GetFileVersionInfoW)>(
+            GetProcAddress(library, "GetFileVersionInfoW"));
+        const auto query_fn = reinterpret_cast<decltype(&VerQueryValueW)>(
+            GetProcAddress(library, "VerQueryValueW"));
+        if (!size_fn || !info_fn || !query_fn) return false;
+        DWORD ignored{};
+        const DWORD size = size_fn(path.c_str(), &ignored);
+        if (!size) return false;
+        std::vector<DWORD> buffer((size + sizeof(DWORD) - 1) / sizeof(DWORD));
+        if (!info_fn(path.c_str(), 0, size, buffer.data())) return false;
+        VS_FIXEDFILEINFO *info{};
+        UINT length{};
+        if (!query_fn(buffer.data(), L"\\", reinterpret_cast<void **>(&info), &length) ||
+            !info || length < sizeof(*info) || info->dwSignature != 0xfeef04bd) return false;
+        return SupportsOptimizedVersion(HIWORD(info->dwFileVersionMS), LOWORD(info->dwFileVersionMS),
+                                        HIWORD(info->dwFileVersionLS), LOWORD(info->dwFileVersionLS));
+    }();
+    FreeLibrary(library);
+    return supported;
+#else
+    return false;
+#endif
+}
+
+int EffectivePreset(int preset, bool optimized_available) {
+    preset = std::clamp(preset, 0, PresetCount - 1);
+    return preset == Optimized && !optimized_available ? Original : preset;
+}
+
 Config Defaults() { return Config{}; }
 
 Config Sanitize(Config config) {
-    config.preset = std::clamp(config.preset, 0, 1);
+    config.preset = std::clamp(config.preset, 0, PresetCount - 1);
     config.input_scale = Finite(config.input_scale, 1.0f, InputScaleMin, 1.0f);
     config.resolve = std::clamp(config.resolve, 0, ResolveCount - 1);
     config.pass_count = std::clamp(config.pass_count, 1, MaxPasses);
@@ -241,8 +295,8 @@ const char *ResolveName(int resolve) {
 }
 
 const char *PresetName(int preset) {
-    static constexpr const char *names[2] = {"default", "shipping"};
-    return names[std::clamp(preset, 0, 1)];
+    static constexpr const char *names[PresetCount] = {"Automatic", "Original", "Optimized"};
+    return names[std::clamp(preset, 0, PresetCount - 1)];
 }
 
 const char *StyleName(int style) {

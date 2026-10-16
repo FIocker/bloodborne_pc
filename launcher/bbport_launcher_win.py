@@ -325,12 +325,52 @@ LIVE = [('auto', ('Auto (by graphics card)', 'Авто (по видеокарт�
 LODS = [('0', ('As in the game', 'Как в игре')), ('-2', ('Highest (−2)', 'Максимальная (−2)')),
         ('1', ('Lower (1)', 'Ниже (1)')), ('2', ('Lowest (2)', 'Минимальная (2)'))]
 # Neural rendering (DLSS NR). The hotkey values are SDL scancodes, as in bbport_neural_settings.h.
-NR_PRESETS = [('0', ('Default',)), ('1', ('Shipping',))]
+NR_PRESETS = [('0', ('Automatic',)), ('1', ('Original',)), ('2', ('Optimized',))]
 NR_RESOLVE = [('auto', ('Auto (1:1 at a 100% input scale)',)),
               ('residual', ('Residual (Magpie + Lanczos3, low detail)',)),
               ('ratio', ('Ratio (luma-ratio resolve)',))]
 NR_STAGES = [('pre', ('Pre-upscale',)), ('post', ('Post-upscale',)), ('present', ('Present',))]
 NR_STYLES = [('0', ('Style 0',)), ('1', ('Style 1',)), ('2', ('Style 2',))]
+def nr_runtime_version():
+    """Read the selected model's fixed file version without loading its executable code."""
+    directory = Path(os.environ.get('BB_NR_RUNTIME') or PORT_DIR / 'bin')
+    if directory.suffix.lower() == '.dll':
+        directory = directory.parent
+    try:
+        from ctypes import wintypes
+        library = ctypes.WinDLL('version.dll')
+        size_fn = library.GetFileVersionInfoSizeW
+        size_fn.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
+        size_fn.restype = wintypes.DWORD
+        info_fn = library.GetFileVersionInfoW
+        info_fn.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p]
+        info_fn.restype = wintypes.BOOL
+        query_fn = library.VerQueryValueW
+        query_fn.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.UINT)]
+        query_fn.restype = wintypes.BOOL
+        path = str(directory / 'nvngx_dlssnr.dll')
+        ignored = wintypes.DWORD()
+        size = size_fn(path, ctypes.byref(ignored))
+        if not size:
+            return None
+        data = ctypes.create_string_buffer(size)
+        if not info_fn(path, 0, size, data):
+            return None
+        value, length = ctypes.c_void_p(), wintypes.UINT()
+        if not query_fn(data, '\\', ctypes.byref(value), ctypes.byref(length)) or not value.value or length.value < 52:
+            return None
+        info = ctypes.cast(value, ctypes.POINTER(wintypes.DWORD))
+        if info[0] != 0xfeef04bd:
+            return None
+        return (info[2] >> 16, info[2] & 0xffff, info[3] >> 16, info[3] & 0xffff)
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
+def nr_optimized_supported(version):
+    return version is not None and version >= (310, 9, 16, 0)
+
+
 _nr_sdl = None
 # Windows set-1 positions of printable keys. Translate the physical position rather than
 # the layout's glyph: e.g. German Z/Y must bind the key that was actually pressed.
@@ -838,6 +878,9 @@ class Launcher:
         s.configure('Code.TLabel', background=PANEL, foreground=GOLD, font=('Consolas', 22, 'bold'))
         s.configure('TCheckbutton', background=PANEL, foreground=TEXT, padding=(0, 3))
         s.map('TCheckbutton', background=[('active', PANEL)], foreground=[('disabled', MUTED)])
+        s.configure('NRPreset.Toolbutton', background=CARD, foreground=MUTED, borderwidth=1, padding=(12, 6))
+        s.map('NRPreset.Toolbutton', background=[('disabled', PANEL), ('selected', LINE), ('active', LINE)],
+              foreground=[('disabled', MUTED), ('selected', TEXT), ('active', TEXT)])
         s.configure('Warning.TLabel', background='#2a1d12', foreground='#e3b25a', padding=(10, 6))
         s.configure('TCombobox', arrowcolor=GOLD, foreground=TEXT, padding=4)
         s.map('TCombobox', fieldbackground=[('readonly', CARD)], foreground=[('readonly', TEXT)],
@@ -1243,11 +1286,20 @@ class Launcher:
         self.section(f, _('Neural rendering', 'Нейронный рендеринг'), top=14)
         self.check(f, 'nr_enabled', 'ini', _('Enable neural rendering (DLSS NR); applies on restart',
                                              'Включить нейронный рендеринг (DLSS NR); после перезапуска'))
-        self.row(f, _('NR preset', 'Пресет NR'), self.choice(f, 'nr_preset', 'ini', NR_PRESETS),
-                 _('Network preset hint used when the feature is created. A runtime with one built-in preset may '
-                   'use it for either setting.',
-                   'Пресет сети при создании функции. У рантайма одна встроенная таблица для обоих: пока не '
-                   'появится другая, Shipping и Default выглядят одинаково.'))
+        model_options = ttk.Frame(f)
+        version = nr_runtime_version()
+        self.nr_preset_buttons = {}
+        for preset, label in NR_PRESETS:
+            button = ttk.Radiobutton(model_options, text=_(*label), value=preset,
+                                     variable=self.var('nr_preset', 'ini'), style='NRPreset.Toolbutton')
+            button.pack(side='left', padx=(0, 16))
+            if preset == '2' and not nr_optimized_supported(version):
+                button.state(['disabled'])
+            self.nr_preset_buttons[preset] = button
+        self.row(f, _('NR preset', 'Пресет NR'), model_options,
+                 _('Automatic: uses the default model in the installed NR DLL. '
+                   'Original: uses the original neural rendering model. '
+                   'Optimized: uses the smaller FP8 model; requires NR 310.9.16.0 or newer.'))
         self.scale_row(f, 'nr_input_scale', _('NR input scale', 'Масштаб входа NR'), 0.25, 1.0,
                        _('1.00 uses the full image at the selected execution point; lower '
                          'values feed it a smaller image and cost less GPU time.',
