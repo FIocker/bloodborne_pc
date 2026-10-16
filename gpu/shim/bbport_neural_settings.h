@@ -37,7 +37,7 @@ constexpr float WhitePointMin = 0.01f, WhitePointMax = 100.0f;
 struct Pass {
     bool enabled = true;
     int stage = PostUpscale;
-    int style = Style2;
+    int style = Style0;
     float intensity = 1.0f; ///< 0..StyleParamMax
     float structure = 1.0f; ///< 0..StyleParamMax
     float tone = 1.0f;      ///< 0..StyleParamMax
