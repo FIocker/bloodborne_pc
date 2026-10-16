@@ -243,11 +243,11 @@ class PassChainWidgetTests(unittest.TestCase):
         w = self.window
         w.nr_rebuild_tabs()
         self.assertEqual(len(w.nr_tabs.tabs()), 1)
-        self.assertEqual(w.nr_tabs.tab(0, 'text'), 'pass 1')
+        self.assertEqual(w.nr_tabs.tab(0, 'text'), 'Pass 1')
         w.nr_add_pass()
         self.assertEqual(len(w.nr_tabs.tabs()), 2)
         self.assertEqual(w.var('nr_passes', 'ini').get(), '2')
-        self.assertEqual(w.nr_tabs.tab(1, 'text'), 'pass 2')
+        self.assertEqual(w.nr_tabs.tab(1, 'text'), 'Pass 2')
         self.assertEqual(w.nr_tabs.index(w.nr_tabs.select()), 1)  # the new tab is selected
         # Edit pass 2, then delete pass 1: the edit moves up with the pass.
         w.var('nr_pass2_intensity', 'ini').set(0.4)
@@ -286,7 +286,7 @@ class PassChainWidgetTests(unittest.TestCase):
         w.fsr4_label = w.fsr4_button = w.fsr4_progress = None
         w.build_graphics()
         self.assertEqual(len(w.nr_tabs.tabs()), 1)
-        self.assertEqual(w.nr_tabs.tab(0, 'text'), 'pass 1')
+        self.assertEqual(w.nr_tabs.tab(0, 'text'), 'Pass 1')
         w.nr_add_pass()
         w.nr_add_pass()
         self.assertEqual(len(w.nr_tabs.tabs()), 3)
