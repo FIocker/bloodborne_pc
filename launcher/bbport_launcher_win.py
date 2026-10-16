@@ -1378,7 +1378,7 @@ class Launcher:
         count = self.nr_pass_count()
         for i in range(1, count + 1):
             frame = self.ttk.Frame(self.nr_tabs, padding=(10, 8, 10, 10))
-            self.nr_tabs.add(frame, text=_('pass {}').format(i))
+            self.nr_tabs.add(frame, text=_('Pass {}').format(i))
             self.check(frame, f'nr_pass{i}_enabled', 'ini', _('Enabled'))
             self.row(frame, _('Execution point'),
                      self.choice(frame, f'nr_pass{i}_stage', 'ini', NR_STAGES),
