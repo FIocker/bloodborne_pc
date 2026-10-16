@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "bbport_settings.h"
+#include "bbport_neural_settings.h"
 
 #include <algorithm>
 #include <charconv>
@@ -176,6 +177,8 @@ void Load() {
         std::fclose(file);
         std::printf("Settings: %s\n", Path());
     }
+    // Neural rendering keeps its own nr_* keys in the same file (bbport_neural_settings.cpp).
+    BbNeural::Load(Path());
     // Environment overrides (scripts, A/B tests).
     if (const char* env = std::getenv("BB_UPSCALER")) {
         v.upscaler = UpscalerOff;
@@ -330,6 +333,8 @@ void Save() {
     // Read by run.sh at start.
     std::fprintf(file, "live_resolution=%s\n", v.live_resolution < 0 ? "auto"
                                                   : v.live_resolution ? "1" : "0");
+    // The neural-rendering keys of the same file: Save() rewrote it, so append them again.
+    BbNeural::Append(file);
     std::fclose(file);
 }
 

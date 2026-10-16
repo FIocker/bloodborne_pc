@@ -12,6 +12,7 @@
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_dlss.h"
+#include "video_core/renderer_vulkan/vk_neural_rendering.h"
 #include "video_core/renderer_vulkan/vk_reflex.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
@@ -455,6 +456,15 @@ bool Instance::CreateDevice() {
     vk13_features = feature_chain.get<vk::PhysicalDeviceVulkan13Features>();
     // bbport: DLSS (optional bridge DLL) needs its own device extensions on NVIDIA GPUs.
     const size_t renderer_extension_count = enabled_extensions.size();
+    std::vector<const char*> neural_extensions;
+    if (NeuralRendering::AppendDeviceExtensions(physical_device, neural_extensions)) {
+        for (const char* name : neural_extensions) {
+            if (std::none_of(enabled_extensions.begin(), enabled_extensions.end(),
+                             [&](const char* e) { return std::string_view{e} == name; }) &&
+                enabled_extensions.size() < enabled_extensions.capacity())
+                enabled_extensions.push_back(name);
+        }
+    }
     std::vector<const char*> dlss_extensions;
     if (Dlss* dlss = Dlss::Get()) {
         dlss->AppendDeviceExtensions(*instance, physical_device, dlss_extensions);
@@ -717,6 +727,7 @@ bool Instance::CreateDevice() {
                                       vk::to_string(device_result)));
         }
         enabled_extensions.resize(renderer_extension_count);
+        NeuralRendering::DisableDevice();
         device_chain.get().enabledExtensionCount = static_cast<u32>(enabled_extensions.size());
         auto retry = physical_device.createDeviceUnique(device_chain.get());
         device_result = retry.result;
