@@ -79,6 +79,13 @@ else
     echo "DLSS bridge not built (packaging/windows/build_dlss.sh): no DLSS in this package" >&2
 fi
 # Online co-op: the libraries compiled in (wepoll, cpp-httplib) and the MSYS2 DLLs it loads.
+if [[ -f out/bbport_nr_nvngx.dll ]]; then
+    cp out/bbport_nr_nvngx.dll "$dest/bin/"
+    mkdir -p "$dest/licenses" "$dest/docs"
+    cp gpu/nr_bridge/LICENSE.txt "$dest/licenses/neural-rendering-adapter-LICENSE.txt"
+    cp docs/NEURAL_RENDERING.md docs/NEURAL_RENDERING_VALIDATION.md "$dest/docs/"
+fi
+# The neural-rendering model is supplied separately; it is not copied into release packages.
 mkdir -p "$dest/licenses"
 cp gpu/third_party/wepoll/LICENSE "$dest/licenses/wepoll-LICENSE.txt"
 cp gpu/third_party/httplib/LICENSE "$dest/licenses/cpp-httplib-LICENSE.txt"

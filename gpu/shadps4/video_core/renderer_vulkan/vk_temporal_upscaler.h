@@ -36,6 +36,7 @@ namespace Vulkan {
 
 class Instance;
 class Scheduler;
+class NeuralRendering;
 class Runtime;
 class CameraMotion;
 class SceneTargets;
@@ -269,6 +270,8 @@ private:
     bool resources_fsr4 = false;  ///< made for FSR 4 (no FSR 3 context)
     bool resources_taa = false;
     std::unique_ptr<Fsr4Upscaler> fsr4;
+    std::unique_ptr<NeuralRendering> neural;
+    bool neural_session = false;
     bool fsr4_failed = false;
     bool dlss_failed = false;
     VideoCore::UniqueImage motion_image;
