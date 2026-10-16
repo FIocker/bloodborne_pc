@@ -53,11 +53,19 @@ class LauncherNeuralSettingsTests(unittest.TestCase):
         self.assertIn('sharpness', launcher.INI_FLOATS)
 
     def test_option_lists_match_the_settings_module(self):
-        self.assertEqual([k for k, _ in launcher.NR_PRESETS], ['0', '1'])
+        self.assertEqual([k for k, _ in launcher.NR_PRESETS], ['0', '1', '2'])
         self.assertEqual([k for k, _ in launcher.NR_RESOLVE], ['auto', 'residual', 'ratio'])
         self.assertEqual([k for k, _ in launcher.NR_STAGES], ['pre', 'post', 'present'])
         self.assertEqual([k for k, _ in launcher.NR_STYLES], ['0', '1', '2'])
         self.assertEqual(launcher.NR_PASS_COUNT, 4)
+
+    def test_nr_model_version_threshold(self):
+        for version, expected in ((None, False), ((310, 8, 0, 0), False),
+                                  ((310, 9, 15, 99), False), ((310, 9, 16, 0), True),
+                                  ((311, 0, 0, 0), True)):
+            self.assertEqual(launcher.nr_optimized_supported(version), expected)
+        self.assertEqual([label[0] for _, label in launcher.NR_PRESETS],
+                         ['Automatic', 'Original', 'Optimized'])
 
     @unittest.skipUnless(os.name == 'nt', 'Windows launcher keyboard mapping')
     def test_hotkey_codes_use_sdl_keyboard_mapping(self):
@@ -187,11 +195,12 @@ class LauncherNeuralSettingsTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as folder:
                 os.environ['BB_CONFIG'] = str(Path(folder) / 'bbport.ini')
                 values = dict(launcher.INI_DEFAULTS)
-                values.update({'nr_enabled': '1', 'nr_resolve': 'ratio', 'nr_passes': '3',
+                values.update({'nr_enabled': '1', 'nr_preset': '2', 'nr_resolve': 'ratio', 'nr_passes': '3',
                                'nr_input_scale': '0.75', 'nr_pass2_stage': 'present'})
                 launcher.save_ini(values, [])
                 loaded, lines = launcher.load_ini()
                 self.assertEqual(loaded['nr_enabled'], '1')
+                self.assertEqual(loaded['nr_preset'], '2')
                 self.assertEqual(loaded['nr_resolve'], 'ratio')
                 self.assertEqual(loaded['nr_passes'], '3')
                 self.assertEqual(loaded['nr_input_scale'], '0.75')
@@ -339,6 +348,20 @@ class PassChainWidgetTests(unittest.TestCase):
         self.assertEqual(w.var('nr_hotkey', 'ini').get(), '0')
         self.assertEqual(w.nr_hotkey_label.cget('text'), '(none)')
         self.assertIsNone(self.root.grab_current())
+
+    def test_optimized_preset_availability_preserves_saved_choice(self):
+        w = self.window
+        w.content = w.ttk.Frame(self.root)
+        w.pages = {}
+        w.ini['nr_preset'] = '2'
+        for version, disabled in ((None, True), ((310, 8, 0, 0), True),
+                                  ((310, 9, 16, 0), False)):
+            with mock.patch.object(launcher, 'nr_runtime_version', return_value=version):
+                w.build_graphics()
+                self.assertEqual('disabled' in w.nr_preset_buttons['2'].state(), disabled)
+                self.assertNotIn('disabled', w.nr_preset_buttons['0'].state())
+                self.assertNotIn('disabled', w.nr_preset_buttons['1'].state())
+                self.assertEqual(w.var('nr_preset', 'ini').get(), '2')
 
     def test_custom_hotkey_is_kept_when_graphics_opens(self):
         w = self.window

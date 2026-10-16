@@ -465,17 +465,22 @@ void Menu() {
         nr_apply = true;
     }
     Hint("Enabling the feature from a fully disabled start requires restarting the game: the renderer allocates the neural extensions at startup. Afterwards the toggle hotkey switches it on and off live.");
-    static const char* nr_presets[] = {"Default", "Shipping"};
+    static const char* nr_presets[] = {"Automatic", "Original", "Optimized"};
+    static const bool nr_optimized = BbNeural::RuntimeSupportsOptimized();
     if (ImGui::BeginCombo("NR preset", nr_presets[nr.preset])) {
-        for (int i = 0; i < 2; ++i) {
+        for (int i = 0; i < BbNeural::PresetCount; ++i) {
+            ImGui::BeginDisabled(i == BbNeural::Optimized && !nr_optimized);
             if (ImGui::Selectable(nr_presets[i], i == nr.preset)) {
                 nr.preset = i;
                 nr_apply = true;
             }
+            ImGui::EndDisabled();
         }
         ImGui::EndCombo();
     }
-    Hint("Network preset hint used when the neural feature is created. A runtime with one built-in preset may use it for either setting.");
+    Hint("Automatic: uses the default model in the installed NR DLL. Original: uses the original neural rendering model. Optimized: uses the smaller FP8 model; requires NR 310.9.16.0 or newer. Changes recreate the NR feature.");
+    if (nr.preset == BbNeural::Optimized && !nr_optimized)
+        ImGui::TextDisabled("Optimized unavailable with this runtime; using Original.");
     ImGui::SliderFloat("NR input scale", &nr.input_scale, BbNeural::InputScaleMin, 1.0f, "%.2f");
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         nr_apply = true;
