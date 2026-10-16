@@ -61,7 +61,7 @@ int main() {
         assert(Near(config.max_ratio, 2.0f) && Near(config.white_point, 1.0f));
         assert(config.passes[0].enabled);
         assert(config.passes[0].stage == PostUpscale);
-        assert(config.passes[0].style == Style2);
+        assert(config.passes[0].style == Style0);
         assert(Near(config.passes[0].intensity, 1.0f));
         assert(!config.passes[0].auto_skin);
         assert(Status() == "Disabled");
@@ -329,7 +329,7 @@ int main() {
         const Config config = Snapshot();
         assert(config.enabled);
         assert(config.pass_count == 1);
-        assert(config.passes[0].style == Style2);
+        assert(config.passes[0].style == Style0);
     }
 
     std::printf("neural settings: ok\n");
