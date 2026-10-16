@@ -284,10 +284,14 @@ bool AspectNeedsRestart() {
 
 bool ResolutionNeedsRestart() {
     const auto& v = Get();
-    // TAA needs the live path (native guest targets): run.sh selects it on restart. Ultrawide
-    // outputs patch the camera and HUD at startup.
-    if (Ultrawide(v.output_res) != Ultrawide(v.startup_output_res)) return true;
-    if (Ultrawide(v.output_res) && v.hud_position != v.startup_hud_position) return true;
+    // Wide outputs patch the camera and the HUD layer (patches.py, hud_layout.py) at startup, and
+    // two wide outputs can share an aspect ratio, so compare the outputs themselves.
+    if ((Ultrawide(v.output_res) || Ultrawide(v.startup_output_res)) &&
+        (v.output_res != v.startup_output_res || v.hud_position != v.startup_hud_position)) {
+        return true;
+    }
+    // TAA needs the live path (native guest targets): run.sh selects it on restart.
+    // An aspect change needs the camera and UI viewport patches rebuilt on restart.
     return AspectNeedsRestart() || (FixedRenderSession() &&
         (v.preset != v.startup_preset || v.output_res != v.startup_output_res ||
          (v.upscaler == UpscalerOff) != (v.startup_upscaler == UpscalerOff) ||

@@ -56,13 +56,17 @@ inline constexpr Effect Effects[] = {
     {"quit_to_desktop", "Quit to Desktop in the title and System menus", true},
 };
 inline constexpr int EffectCount = int(sizeof(Effects) / sizeof(Effects[0]));
-/// Output resolutions and a final slot for a validated custom size from the launcher/ini.
-inline int OutputWidths[] = {1280,1920,2560,3840,2560,3440,3840,5120,3840,5120,1280,1080,1920};
-inline int OutputHeights[] = {720,1080,1440,2160,1080,1440,1600,2160,1080,1440,800,1920,1080};
+/// Live output resolutions: the upscaler's output and the UI host targets, including the named
+/// 21:9/32:9 presets. Wider-than-16:9 outputs keep the HUD centred and widen the camera with the
+/// startup patch (patches.py, run.py sets BB_RENDER_RES/BB_OUTPUT_RES), so they change only on a
+/// restart; 16:9 and narrower ones change live.
+// Last slot retains a validated custom resolution loaded from the launcher/ini.
+inline int OutputWidths[] = {1280,1920,2560,3840,1280,2560,3440,5120,5120,1080,3840,3840,1920};
+inline int OutputHeights[] = {720,1080,1440,2160,800,1080,1440,1440,2160,1920,1600,1080,1080};
 inline constexpr int OutputCount = sizeof(OutputWidths) / sizeof(OutputWidths[0]);
 inline constexpr int OutputCustom = OutputCount - 1;
 inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
-/// Wider than 16:9: camera and HUD patched at startup.
+/// Wider than 16:9: the camera and the menu/HUD layer are patched at startup.
 inline bool Ultrawide(int output) {
     return OutputWidths[output] * 9 > OutputHeights[output] * 16;
 }
@@ -97,7 +101,7 @@ struct Values {
     std::atomic<int> output_res{OutputDefault}; ///< index into OutputWidths
     /// Ultrawide outputs: the HUD's corner groups, 0 centred in 16:9 .. 100 at the screen edges
     /// (hud_layout.py at start).
-    std::atomic<int> hud_position{100};
+    std::atomic<int> hud_position{0};
     /// Live resolution and preset changes (run.sh): 0 off by default (startup patch, fastest
     /// on the Steam Deck and older GPUs), -1 auto (strong discrete GPUs), 1 on. On restart.
     std::atomic<int> live_resolution{0};
@@ -118,7 +122,7 @@ struct Values {
     bool startup_effects[EffectCount]{};
     int startup_model_lod = 0;
     int startup_output_res = OutputDefault;
-    int startup_hud_position = 100;
+    int startup_hud_position = 0;
     int startup_live_resolution = 0;
 };
 

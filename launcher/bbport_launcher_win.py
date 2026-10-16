@@ -196,7 +196,7 @@ INI_FLAGS = {'sharpen', 'object_motion', 'show_fps', *(k for k, _t, _o in EFFECT
 INI_DEFAULTS = {'upscaler': 'fsr4', 'frame_generation': 'off', 'fg_backend': 'dlss', 'reflex': 'on',
                 'preset': '1', 'sharpen': '1', 'sharpness': '0.50',
                 'object_motion': '1', 'show_fps': '1', 'output_res': '1920x1080', 'model_lod': '0',
-                'live_resolution': 'auto', 'hud_position': '100',
+                'live_resolution': 'auto', 'hud_position': '0',
                 **{key: '1' if on else '0' for key, _t, on in EFFECTS + EXTRAS + CHEATS + TWEAKS}}
 APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / 'CUSA03173'), 'user_dir': '', 'dlc_dir': '',
                 'mods_dir': '', 'mods_enabled': True, 'patches_dir': '', 'language': '1',
@@ -232,10 +232,10 @@ PRESETS = [('0', ('Native AA (×1.0)',)), ('1', ('Quality (×1.5)',)), ('2', ('B
            ('3', ('Performance (×2)',)), ('4', ('Ultra Performance (×3)',))]
 OUTPUTS = [('1280x720', ('1280 × 720 (Steam Deck)',)), ('1920x1080', ('1920 × 1080',)),
            ('2560x1440', ('2560 × 1440',)), ('3840x2160', ('3840 × 2160 (4K)',)),
-           ('2560x1080', ('2560 × 1080 (21:9)',)), ('3440x1440', ('3440 × 1440 (21:9)',)),
-           ('3840x1600', ('3840 × 1600 (21:9)',)), ('5120x2160', ('5120 × 2160 (21:9)',)),
-           ('3840x1080', ('3840 × 1080 (32:9)',)), ('5120x1440', ('5120 × 1440 (32:9)',)),
-           ('1280x800', ('1280 x 800 (16:10)',)), ('1080x1920', ('1080 x 1920 (Portrait)',))]
+           ('1280x800', ('1280 × 800 (16:10)',)), ('2560x1080', ('2560 × 1080 (21:9)',)),
+           ('3440x1440', ('3440 × 1440 (21:9)',)), ('3840x1600', ('3840 × 1600 (21:9)',)),
+           ('5120x2160', ('5120 × 2160 (21:9)',)), ('3840x1080', ('3840 × 1080 (32:9)',)),
+           ('5120x1440', ('5120 × 1440 (32:9)',)), ('1080x1920', ('1080 × 1920 (Portrait)',))]
 HUD_POSITIONS = [('100', ('Screen edges', 'У краёв экрана')), ('75', ('75%',)), ('50', ('Halfway', 'Посередине')),
                  ('25', ('25%',)), ('0', ('Centred (16:9)', 'По центру (16:9)'))]
 LIVE = [('auto', ('Auto (by graphics card)', 'Авто (по видеокарте)')), ('0', ('Off (faster)', 'Выключена (быстрее)')),

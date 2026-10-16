@@ -1550,35 +1550,25 @@ void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId
         .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
     };
     cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier});
-    // Ultrawide: menus without a scene draw their backdrop over the 1920-wide stage only and
-    // leave the game's grey clear color beside it. Those columns are black instead. A frame
-    // with a scene (G-buffer depth this frame) fills the whole width: upscaler off, or a menu
-    // over the world.
-    const bool scene = !camera_motion.Enabled() || camera_motion.Depth();
-    const float side = scene ? 0.0f : 0.5f * (1.0f - 1920.0f / float(UiComposition::MovieViewport().first));
-    const s32 src_side = s32(std::lround(source_width * side));
-    const s32 dst_side = s32(std::lround(ui_width * side));
-    if (dst_side > 0) {
-        cmd.clearColorImage(vk::Image(ui_image), vk::ImageLayout::eTransferDstOptimal,
-                            vk::ClearColorValue{std::array{0.0f, 0.0f, 0.0f, 1.0f}},
-                            vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
-        const vk::MemoryBarrier2 cleared{.srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
-                                         .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-                                         .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
-                                         .dstAccessMask = vk::AccessFlagBits2::eTransferWrite};
-        cmd.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &cleared});
-    }
     const vk::ImageBlit region{
         .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-        .srcOffsets = std::array{vk::Offset3D{src_side, 0, 0},
-            vk::Offset3D{s32(source_width) - src_side, s32(source_height), 1}},
+        .srcOffsets = std::array{vk::Offset3D{0, 0, 0},
+            vk::Offset3D{s32(source_width), s32(source_height), 1}},
         .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-        .dstOffsets = std::array{vk::Offset3D{dst_side, 0, 0},
-            vk::Offset3D{s32(ui_width) - dst_side, s32(ui_height), 1}},
+        .dstOffsets = std::array{vk::Offset3D{0, 0, 0},
+            vk::Offset3D{s32(ui_width), s32(ui_height), 1}},
     };
-    cmd.blitImage(source, source_layout,
-                  vk::Image(ui_image), vk::ImageLayout::eTransferDstOptimal, region,
-                  vk::Filter::eLinear);
+    const auto [movie_w, movie_h] = UiComposition::MovieViewport();
+    if (!camera_motion.Ready() && uint64_t(movie_w) * 9 != uint64_t(movie_h) * 16) {
+        // The title/loading movie paints the central stage; its surrounding bars are black.
+        cmd.clearColorImage(vk::Image(ui_image), vk::ImageLayout::eTransferDstOptimal,
+                            vk::ClearColorValue{std::array<float,4>{0,0,0,1}},
+                            vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor,0,1,0,1});
+    } else {
+        cmd.blitImage(source, source_layout,
+                      vk::Image(ui_image), vk::ImageLayout::eTransferDstOptimal, region,
+                      vk::Filter::eLinear);
+    }
     barrier.srcStageMask = vk::PipelineStageFlagBits2::eTransfer;
     barrier.srcAccessMask = vk::AccessFlagBits2::eTransferWrite;
     barrier.dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput;

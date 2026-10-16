@@ -20,7 +20,11 @@ constexpr Background Choose(bool scaled, bool ui_draw, bool scene_ready, bool fs
     return scene_ready && fsr_active ? Background::Temporal : Background::Copy;
 }
 
-// The movie fits its 1920x1080 logical stage into this physical viewport.
+// The UI's coordinate space: the physical viewport the port composes the UI into, so the movie
+// fits its 1920x1080 logical stage into this and the game's show-all mode centers that stage.
+// run.py sets BB_UI_RES to the output size for every ratio; wider outputs widen the camera only.
+// hud_layout.py's logical canvas width (patches.py hud_canvas) is a layer-side number for the
+// menu backdrops and HUD corner groups, not this viewport.
 inline std::pair<uint32_t, uint32_t> MovieViewport() {
     static const auto size = [] {
         uint32_t w = 1920, h = 1080, x = 0, y = 0;

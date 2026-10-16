@@ -189,9 +189,11 @@ def resolution_writes(xml,size,app_version,segments,ui=OUTPUT_SIZE):
 
 
 def hud_canvas(output):
-    """The HUD's coordinate space for an output: 1920x1080 up to 16:9, wider (still 1080 high,
-    even width) for ultrawide outputs, e.g. 2580x1080 for 3440x1440. The port scales it to the
-    output uniformly (UiComposition, BB_UI_RES)."""
+    """The logical width the game's 1920x1080 stage has to grow to for an output, so its edges
+    meet the output's own: 1920x1080 up to 16:9, wider (still 1080 high, even width) above it,
+    e.g. 2580x1080 for 3440x1440. run.py passes the width to hud_layout.py, whose mod layer moves
+    the HUD's corner groups toward the physical screen edges. It is never the guest UI coordinate
+    space: BB_UI_RES is the output size for every ratio (centered-stage UiComposition)."""
     w,h=output
     if w*OUTPUT_SIZE[1]<=h*OUTPUT_SIZE[0]: return OUTPUT_SIZE
     return (round(OUTPUT_SIZE[1]*w/h/2)*2,OUTPUT_SIZE[1])
@@ -434,16 +436,14 @@ def main():
     # Scaleform's logical stage remains 1920x1080. At non-16:9 output sizes,
     # give its show-all mode the actual physical viewport so it centers the stage.
     # The renderer uses that coordinate space for native-resolution UI draws.
-    output=output_size({'output_res': a.output_res}) if a.output_res else OUTPUT_SIZE
+    # The HUD's own corner groups are moved by the hud_layout mod layer (run.py,
+    # hud_canvas width), not by these writes: the camera stays at the output aspect.
     ui=OUTPUT_SIZE
     if a.output_res:
         out=output_size({'output_res': a.output_res})
         if out[0]*9 != out[1]*16: ui=out
     if size:
         writes+=resolution_writes(a.xml,size,a.app_version,segments,ui)
-        if ui!=OUTPUT_SIZE:
-            writes+=ultrawide_writes(a.xml,output,a.app_version,segments)
-            names.append(f'ultrawide {output[0]}x{output[1]} (HUD {ui[0]}x{ui[1]})')
         if size[0]*size[1]>OUTPUT_SIZE[0]*OUTPUT_SIZE[1]:
             heap='Increased Graphics Heap Sizes'
             writes+=compile_patches(a.xml,[heap],a.app_version,segments)
