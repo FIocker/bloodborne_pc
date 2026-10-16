@@ -16,6 +16,7 @@
 #include <vk_mem_alloc.h>
 
 #include "bbport_settings.h"
+#include "bbport_neural_settings.h"
 #include "bbport_toggles.h"
 #include "ffx_vk_portable.h"
 #include "video_core/host_shaders/upscale_merge_comp.h"
@@ -30,6 +31,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_neural_rendering.h"
 #include "video_core/texture_cache/texture_cache.h"
 
 namespace Vulkan {
@@ -167,6 +169,8 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
     BbSettings::ConfigureUpscalerSupport(instance.IsFsr4Int8Supported(),
                                          instance.IsFsr411Supported());
     fsr4 = std::make_unique<Fsr4Upscaler>(instance, scheduler);
+    neural_session = BbNeural::Snapshot().enabled;
+    neural = std::make_unique<NeuralRendering>(instance, scheduler);
     {
         const Dlss* dlss = Dlss::Get();
         static std::string problem;
@@ -177,7 +181,7 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
     // Available unless BB_UPSCALER=none; on/off and the parameters are the menu's settings.
     const char* env = std::getenv("BB_UPSCALER");
     enabled = !(env && std::strcmp(env, "none") == 0) ||
-              BbSettings::Get().startup_frame_generation != 0;
+              BbSettings::Get().startup_frame_generation != 0 || neural_session;
     if (const char* hash = std::getenv("BB_UPSCALE_BEFORE_CS")) {
         trigger_hash = std::strtoull(hash, nullptr, 16);
     }
@@ -291,6 +295,7 @@ bool TemporalUpscaler::OnFrameStart() {
     }
     fg_completed = fg_pending;
     fg_pending = {};
+    neural->BeginFrame();
     ++fg_render_serial;
     // bbport: BB_PRESET_FILE=<file> holding a preset number, read about once a second: switches
     // the preset like the menu does (scripted tests of live preset changes).
@@ -1104,6 +1109,9 @@ void TemporalUpscaler::Run() {
                 vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
                 vk::ImageLayout::eGeneral, all, vk::AccessFlagBits2::eShaderRead);
 
+    neural->Record(cmdbuf, BbNeural::PreUpscale,
+        {input_color, input_color_view, color.info.pixel_format, w, h, true, true},
+        {*motion_view, input_depth_view, w, h}, reset);
     const bool has_reactive = mask_ready || RecordReactive(input_color_view);
 
     const auto now = std::chrono::steady_clock::now();
@@ -1201,6 +1209,9 @@ void TemporalUpscaler::Run() {
         if (BbSettings::Get().upscaler != BbSettings::UpscalerTaa) {
             ExtraSharpen(cmdbuf, vk::Image(output_image), false, ow, oh);
         }
+        neural->Record(cmdbuf, BbNeural::PostUpscale,
+            {vk::Image(output_image), *output_view, vk::Format::eR16G16B16A16Sfloat,
+             ow, oh, true, true}, {*motion_view, input_depth_view, w, h}, reset);
         // The result replaces the scene color's RGB (its alpha carries data for the post).
         own_barrier(vk::Image(output_image), vk::ImageLayout::eGeneral, all, rw,
                     vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
@@ -1319,7 +1330,7 @@ float TemporalUpscaler::SceneMipBias() const {
 
 bool TemporalUpscaler::Scaled() const {
     return scaled_session || target_width != 1920 || target_height != 1080 ||
-           BbSettings::Get().startup_frame_generation != 0;
+           BbSettings::Get().startup_frame_generation != 0 || neural_session;
 }
 
 void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
@@ -1682,6 +1693,12 @@ void TemporalUpscaler::RunScaled() {
             vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
             vk::ImageLayout::eGeneral, all, vk::AccessFlagBits2::eShaderRead);
 
+    neural->Record(cmdbuf, BbNeural::PreUpscale,
+        {color_image, color_view, color.info.pixel_format, w, h,
+         color.info.pixel_format == vk::Format::eR8G8B8A8Srgb ||
+         color.info.pixel_format == vk::Format::eB8G8R8A8Srgb, false},
+        {*motion_view, depth_view, w, h}, reset);
+
     const auto now = std::chrono::steady_clock::now();
     float frame_ms = std::chrono::duration<float, std::milli>(now - last_frame).count();
     if (frame_ms <= 0.0f || frame_ms > 200.0f) {
@@ -1716,6 +1733,13 @@ void TemporalUpscaler::RunScaled() {
             if (BbSettings::Get().upscaler != BbSettings::UpscalerTaa) {
                 ExtraSharpen(cmdbuf, vk::Image(output_image), false, ow, oh);
             }
+            neural->Record(cmdbuf, BbNeural::PostUpscale,
+                {vk::Image(output_image), *output_view, vk::Format::eR16G16B16A16Sfloat,
+                 // This is the LDR chain. A float target alone does not make it HDR;
+                 // SR retains the encoding of the sampled LDR source.
+                 ow, oh, color.info.pixel_format == vk::Format::eR8G8B8A8Srgb ||
+                         color.info.pixel_format == vk::Format::eB8G8R8A8Srgb, false},
+                {*motion_view, depth_view, w, h}, reset);
             barrier(vk::Image(output_image), vk::ImageAspectFlagBits::eColor,
                     vk::ImageLayout::eGeneral, all, rw, vk::ImageLayout::eGeneral,
                     vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferRead);
@@ -1832,6 +1856,11 @@ void TemporalUpscaler::RunScaled() {
         reset = false;
         dispatched_last_frame = true;
         ExtraSharpen(cmdbuf, vk::Image(ui_image), true, ow, oh);
+        neural->Record(cmdbuf, BbNeural::PostUpscale,
+            {vk::Image(ui_image), Mirror(vk::Image(ui_image), ui_views, ui_format, {}),
+             ui_format, ow, oh, ui_format == vk::Format::eR8G8B8A8Srgb ||
+             ui_format == vk::Format::eB8G8R8A8Srgb, false},
+            {*motion_view, depth_view, w, h}, reset);
     }
     barrier(vk::Image(ui_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral, all,
             rw, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -1848,6 +1877,12 @@ void TemporalUpscaler::RunScaled() {
 
 void TemporalUpscaler::CaptureGenerationGuides(vk::CommandBuffer cmd,
     vk::ImageView scene_depth, u32 w, u32 h, float frame_ms, bool existing_motion) {
+    if (camera_motion.Ready())
+        neural->CaptureHudless(cmd,
+            {vk::Image(ui_image), Mirror(vk::Image(ui_image), ui_views, ui_format, {}),
+             ui_format, ui_width, ui_height,
+             ui_format == vk::Format::eR8G8B8A8Srgb || ui_format == vk::Format::eB8G8R8A8Srgb,
+             false});
     const auto& settings = BbSettings::Get();
     if (!settings.startup_frame_generation || !scene_depth || !camera_motion.Ready() || !w || !h)
         return;
@@ -2067,6 +2102,18 @@ bool TemporalUpscaler::RedirectSampled(VideoCore::ImageId image,
     if (!ui_read_barrier) {
         ui_read_barrier = true;
         scheduler.EndRendering();
+        const auto nr_cmd = scheduler.CommandBuffer();
+        if (neural->Record(nr_cmd, BbNeural::Present,
+                {vk::Image(ui_image), Mirror(vk::Image(ui_image), ui_views, ui_format, {}),
+                 ui_format, ui_width, ui_height,
+                 ui_format == vk::Format::eR8G8B8A8Srgb || ui_format == vk::Format::eB8G8R8A8Srgb,
+                 false}, {}, false)) {
+            const auto clean = neural->ProcessedHudless();
+            if (fg_pending.valid && clean.image) {
+                FgCopy(nr_cmd, clean.image, vk::ImageLayout::eGeneral,
+                       clean.width, clean.height, fg_color);
+            }
+        }
         const vk::ImageMemoryBarrier2 b{
             .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
             .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
