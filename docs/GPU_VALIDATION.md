@@ -1,6 +1,6 @@
 # Windows GPU validation
 
-Frame-generation evidence is from an RTX 5080 on driver 617.14, FIFO presentation,
+Frame-generation evidence is from an test GPU on driver tested driver, FIFO presentation,
 object motion enabled and copied saves in offline play, on the actual native ultrawide desktop
 at approximately 120 Hz. Frame rates are PresentMon display intervals, not rates
 inferred from a requested multiplier. The CPU interval below runs from a guest pad
@@ -24,7 +24,7 @@ cap, and the precise capped-frame limiter retain their existing behavior.
 
 ### Same-machine reconstruction comparison
 
-RTX 5080, driver 617.14, the same copied offline save and stationary view,
+test GPU, driver tested driver, the same copied offline save and stationary view,
 DLSS Quality, FG Off, Reflex Off, Immediate presentation and sharpness 0.50.
 Each run lasts 150 s; the final 60 s is measured. SDK input/output sizes match
 across these runs. The submitted rates above the monitor refresh are throughput,
