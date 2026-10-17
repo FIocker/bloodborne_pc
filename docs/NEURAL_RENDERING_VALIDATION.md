@@ -6,7 +6,7 @@ not replace the earlier FG validation.
 
 ## Runtime and controls
 
-Tested on Windows with an RTX 5080, driver 617.14, and user-supplied NR runtime
+Tested on Windows with an test GPU, driver tested driver, and user-supplied NR runtime
 310.8.0.0. Model SHA-256:
 `e67dee209320cdafe0e93e45675d7aa34323a53acc57a72b2e40a181581c989a`.
 The model is not distributed in this change.
@@ -126,3 +126,12 @@ Original matches the old DLL exactly, and differs from Optimized. This verifies
 model selection and output, not gameplay performance or a general speedup.
 Earlier gameplay and FG results above used runtime 310.8; they were not repeated
 for this preset follow-up. The smoke tool accepts `--preset 0`, `1` or `2`.
+
+## Windows 1.9.1 rebase
+
+The NR changes are replayed on the paced FG/Reflex integration over upstream
+Windows 1.9.1 (`b4dcc82`), excluding the upstream FG implementation. The NR bridge,
+shader and compositor code is unchanged from the preset follow-up. The 43 neural
+Python checks pass (24 launcher checks and 19 compositor-math checks). The new
+1.9.1 executable has not been gameplay- or frame-pacing-tested; the GPU results
+above remain attributed to their older executables. See REBASE_2026-10-18.md.
