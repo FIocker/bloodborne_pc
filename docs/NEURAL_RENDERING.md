@@ -83,7 +83,7 @@ See [NEURAL_RENDERING_VALIDATION.md](NEURAL_RENDERING_VALIDATION.md) for the
 runtime-output, controls, gameplay and FG regression checks. Earlier FG
 measurements in `GPU_VALIDATION.md` identify earlier executables.
 
-This optional Windows backend was tested on an RTX 5080 with runtime 310.8.
+This optional Windows backend was tested on an NVIDIA test GPU with runtime 310.8.
 The feature-18 interface is not part of the public NGX SDK: other runtime
 versions and GPUs need their own validation. HDR game output and companion-GPU
 offload have not been validated; this backend uses the rendering GPU.

@@ -8,6 +8,12 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()
+# Do not publish the builder's checkout/profile path through __FILE__ or debug metadata.
+# Relative source paths still identify assertions and logging sites.
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    get_filename_component(BB_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+    add_compile_options("-ffile-prefix-map=${BB_SOURCE_ROOT}=.")
+endif()
 # Frame pointers keep the loader's thread dumps (watchdog, SIGUSR2 sampling) walkable.
 add_compile_options(-fno-omit-frame-pointer)
 if (MINGW)

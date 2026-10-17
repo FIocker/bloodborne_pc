@@ -6,7 +6,7 @@ not replace the earlier FG validation.
 
 ## Runtime and controls
 
-Tested on Windows with an RTX 5080, driver 617.14, and user-supplied NR runtime
+Tested on Windows with an NVIDIA test GPU, driver tested driver, and user-supplied NR runtime
 310.8.0.0. Model SHA-256:
 `e67dee209320cdafe0e93e45675d7aa34323a53acc57a72b2e40a181581c989a`.
 The model is not distributed in this change.
