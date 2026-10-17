@@ -30,16 +30,6 @@ void Set(Values& v, const std::string& key, const std::string& value) {
                 v.upscaler = u;
             }
         }
-    } else if (key == "frame_gen") {
-        for (int g = 0; g < FrameGenCount; ++g) {
-            if (value == FrameGenName(g)) {
-                v.frame_gen = g;
-            }
-        }
-    } else if (key == "frame_gen_multiplier") {
-        v.frame_gen_multiplier = std::clamp(i, 2, 4);
-    } else if (key == "frame_gen_fit_display") {
-        v.frame_gen_fit_display = i != 0;
     } else if (key == "preset") {
         v.preset = std::clamp(i, 0, PresetCount - 1);
     } else if (key == "sharpen") {
@@ -135,8 +125,6 @@ void Load() {
         {"BB_REACTIVE", "reactive"},              {"BB_REACTIVE_SCALE", "reactive_scale"},
         {"BB_REACTIVE_THRESHOLD", "reactive_threshold"}, {"BB_REACTIVE_MAX", "reactive_max"},
         {"BB_UPSCALE_PRESET", "preset"},            {"BB_OBJECT_MOTION", "object_motion"},
-        {"BB_FRAME_GEN", "frame_gen"},              {"BB_FRAME_GEN_MULTIPLIER", "frame_gen_multiplier"},
-        {"BB_FRAME_GEN_FIT_DISPLAY", "frame_gen_fit_display"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
@@ -228,9 +216,6 @@ void Save() {
     for (int e = 0; e < EffectCount; ++e) {
         std::fprintf(file, "%s=%d\n", Effects[e].key, int(v.effects[e].load()));
     }
-    std::fprintf(file, "frame_gen=%s\nframe_gen_multiplier=%d\nframe_gen_fit_display=%d\n",
-                 FrameGenName(v.frame_gen), v.frame_gen_multiplier.load(),
-                 int(v.frame_gen_fit_display.load()));
     std::fprintf(file, "model_lod=%d\noutput_res=%dx%d\n", v.model_lod.load(),
                  OutputWidths[v.output_res], OutputHeights[v.output_res]);
     std::fprintf(file, "mute_unfocused=%d\n", int(v.mute_unfocused.load()));
@@ -255,11 +240,6 @@ const char* PresetName(int preset) {
     static constexpr const char* names[PresetCount] = {"Native AA", "Quality", "Balanced",
                                                        "Performance", "Ultra Performance"};
     return names[std::clamp(preset, 0, PresetCount - 1)];
-}
-
-const char* FrameGenName(int frame_gen) {
-    static constexpr const char* names[FrameGenCount] = {"off", "fsr3", "dlss"};
-    return names[std::clamp(frame_gen, 0, FrameGenCount - 1)];
 }
 
 const char* UpscalerName(int upscaler) {

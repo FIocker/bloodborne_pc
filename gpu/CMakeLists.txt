@@ -129,9 +129,6 @@ add_host_shader(depth_resample.frag depth_resample_frag)
 add_host_shader(depth_resample.frag depth_stencil_resample_frag HAS_STENCIL=1)
 add_host_shader(depth_resample.frag depth_stencil_bits_frag STENCIL_BITS=1)
 add_host_shader(camera_motion.comp camera_motion_debug_comp DEBUG_OVERLAY=1)
-# Frame generation (vk_frame_generation.cpp): its depth input and the UI over generated frames.
-add_host_shader(frame_gen_inputs.comp frame_gen_inputs_comp)
-add_host_shader(frame_gen_ui.comp frame_gen_ui_comp)
 foreach(BPP IN ITEMS 8 16 32 64 96 128)
     add_host_shader(tiling.comp tiling_micro_${BPP}_comp BITS_PER_PIXEL=${BPP} IS_MACRO_TILED=0)
     add_host_shader(tiling.comp tiling_macro_${BPP}_comp BITS_PER_PIXEL=${BPP} IS_MACRO_TILED=1)
@@ -237,8 +234,7 @@ target_compile_options(bbgpu PRIVATE -Wno-deprecated-declarations -Wno-missing-f
 if (NOT WIN32)
     target_link_options(bbgpu PRIVATE -Wl,--allow-shlib-undefined)
 endif()
-target_link_libraries(bbgpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan
-    ffx-vulkan::fsr3-vk-framegeneration-3.1.6)
+target_link_libraries(bbgpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
 target_link_libraries(bbgpu PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
     tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
 if (WIN32)
