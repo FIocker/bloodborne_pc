@@ -21,6 +21,7 @@
 #include <vector>
 #include <SDL3/SDL.h>
 #include "../bbgpu.h"
+#include "video_core/renderer_vulkan/vk_reflex.h"
 #include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "common/rdtsc.h"
@@ -393,4 +394,20 @@ extern "C" int bbgpu_input_reload_requested(void) {
 
 extern "C" void bbgpu_mouse_camera_configure(int direct, float sensitivity, float scale_x, float scale_y, int sync) {
     Core::BloodborneCam::Instance().Configure(direct != 0, sensitivity, scale_x, scale_y, sync != 0);
+}
+
+extern "C" void bbgpu_reflex_pre_input_sample(void) {
+    Vulkan::Reflex::PreInputSample();
+}
+
+extern "C" void bbgpu_reflex_on_input_sampled(void) {
+    Vulkan::Reflex::OnInputSampled();
+}
+
+extern "C" void bbgpu_reflex_on_simulation_end(void) {
+    Vulkan::Reflex::OnSimulationEnd();
+}
+
+extern "C" uint64_t bbgpu_reflex_current_sim_frame_id(void) {
+    return Vulkan::Reflex::CurrentSimFrameId();
 }
