@@ -62,6 +62,9 @@ struct UniqueImage {
     }
 
     void Create(const vk::ImageCreateInfo& image_ci);
+    /// bbport: as Create, but returns false where the GPU has no memory left for the image
+    /// (the texture cache frees unused images and tries again).
+    bool TryCreate(const vk::ImageCreateInfo& image_ci);
 
     void Destroy();
 
@@ -99,6 +102,9 @@ struct Image {
         const auto image_end = info.guest_address + info.guest_size;
         return image_addr < overlap_end && overlap_cpu_addr < image_end;
     }
+
+    /// bbport: creates the Vulkan image again after allocation_failed; false while no memory.
+    bool RetryAllocation();
 
     vk::Image GetImage() const {
         return backing->image.image;
@@ -152,6 +158,8 @@ public:
         u32 vo_surface : 1;
     } usage{};
     bool scene_proxy = false; ///< bbport: SceneTargets holds a reduced-size proxy of it
+    /// bbport: no GPU memory for the image when it was created (RetryAllocation).
+    bool allocation_failed = false;
     VAddr track_addr = 0;
     VAddr track_addr_end = 0;
     VAddr guest_begin = 0; ///< info.guest_address

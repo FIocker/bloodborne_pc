@@ -40,11 +40,15 @@ PATCH_VERSION = '01.09'
 MAX_LOG_LINES = 6000
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 # This build; GitHub release tags are windows-v<VERSION>.
-VERSION = '1.9.1-beta.6'
+VERSION = '1.9.2-beta.6'
 # Co-op: the community server that answers the game's own server requests.
 COMMUNITY_SERVER = 'https://thehuntersdream.com'
 RELEASES_API = 'https://api.github.com/repos/Supermedo/bloodborne_pc/releases/latest'
 RELEASES_PAGE = 'https://github.com/Supermedo/bloodborne_pc/releases/latest'
+RELEASES_LIST_API = 'https://api.github.com/repos/Supermedo/bloodborne_pc/releases?per_page=100'
+# The oldest version Advanced > Other versions offers: older ones cannot install themselves the
+# same way (--install-update) or read today's settings.
+OLDEST_INSTALLABLE = '1.8.2'
 UPDATE_DIR = Path(tempfile.gettempdir()) / 'bbport-update'
 # Never copied over an installation by an update (the package does not hold them either).
 USER_FILES = ('user', 'out', 'mods', 'bbport.ini', 'input.ini', 'mods.json', 'patches.json', 'last_run.log')
@@ -824,6 +828,7 @@ class Launcher:
             self.nav[name] = item
         tk.Frame(side, bg=BG).pack(fill='both', expand=True)
         self.update_box = None
+        self.version_window = None  # Advanced > Other versions
         self.side_note = tk.Label(side, text=_('In the game: Insert or L3+R3\nopens the port\'s menu.',
                                                'В игре: Insert или L3+R3\nоткрывает меню порта.'),
                                   bg=BG, fg=MUTED, font=('Segoe UI', 9), justify='left', wraplength=self.px(210))
@@ -1857,6 +1862,8 @@ class Launcher:
         ttk.Button(holder, text=_('Check for updates', 'Проверить обновления'),
                    command=lambda: threading.Thread(target=self.check_update, args=(True,), daemon=True).start()
                    ).pack(side='left')
+        ttk.Button(holder, text=_('Other versions…', 'Другие версии…'), command=self.choose_version).pack(
+            side='left', padx=(6, 0))
         ttk.Label(holder, text=f'v{VERSION}', style='Muted.TLabel').pack(side='left', padx=10)
         holder = ttk.Frame(f)
         holder.grid(row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(10, 0))
@@ -2307,22 +2314,38 @@ class Launcher:
             self.status.configure(text=text, fg=GOLD)
 
     def install_update(self, version, url, page):
-        if self.process:
-            self.messagebox.showinfo('Bloodborne', _('Close the game before updating.', 'Закройте игру перед обновлением.'))
-            return
-        if not FROZEN or not url:  # a source tree updates with git
-            webbrowser.open(page)
-            return
-        if not self.messagebox.askyesno('Bloodborne', _(
-                'Install version {} now? The launcher closes, installs it and opens again. Saves and settings are kept.',
-                'Установить версию {} сейчас? Лаунчер закроется, установит её и откроется снова. Сохранения и '
-                'настройки останутся.').format(version)):
-            return
-        self.update_button.configure(state='disabled')
-
+        """The side box's Update button."""
         def progress(percent):
             self.update_label.configure(text=_('Downloading version {}… {}%', 'Загрузка версии {}… {}%').format(
                 version, percent))
+
+        def failed():
+            self.update_button.configure(state='normal')
+            self.update_label.configure(text=_('Version {} is available.', 'Доступна версия {}.').format(version))
+        if self.install_version(version, url, page, progress, failed):
+            self.update_button.configure(state='disabled')
+
+    def install_version(self, version, url, page, progress, failed):
+        """Downloads release `version` and lets its launcher copy itself over this installation
+        (saves, settings and mods stay). False when nothing was started."""
+        if self.process:
+            self.messagebox.showinfo('Bloodborne', _('Close the game before updating.', 'Закройте игру перед обновлением.'))
+            return False
+        if not FROZEN or not url:  # a source tree updates with git
+            webbrowser.open(page)
+            return False
+        if version_tuple(version) < version_tuple(VERSION):
+            question = _('Install the older version {} now? The launcher closes, installs it and opens again. Saves and '
+                         'settings are kept. To stay on it, switch off "Check for updates when the launcher opens".',
+                         'Установить старую версию {} сейчас? Лаунчер закроется, установит её и откроется снова. '
+                         'Сохранения и настройки останутся. Чтобы остаться на ней, выключите «Проверять обновления '
+                         'при открытии лаунчера».')
+        else:
+            question = _('Install version {} now? The launcher closes, installs it and opens again. Saves and settings are kept.',
+                         'Установить версию {} сейчас? Лаунчер закроется, установит её и откроется снова. Сохранения и '
+                         'настройки останутся.')
+        if not self.messagebox.askyesno('Bloodborne', question.format(version)):
+            return False
 
         def work():
             try:
@@ -2350,12 +2373,112 @@ class Launcher:
                                  cwd=str(new), stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
                 self.ui_calls.put(self.root.destroy)
             except (OSError, zipfile.BadZipFile) as failure:
-                def failed(error=failure):
-                    self.update_button.configure(state='normal')
-                    self.update_label.configure(text=_('Version {} is available.', 'Доступна версия {}.').format(version))
+                def show_failure(error=failure):
+                    failed()
                     self.messagebox.showerror('Bloodborne', _('Update failed: {}', 'Не удалось обновить: {}').format(error))
-                self.ui_calls.put(failed)
+                self.ui_calls.put(show_failure)
         threading.Thread(target=work, daemon=True).start()
+        return True
+
+    def choose_version(self):
+        """Advanced > Other versions: any release from OLDEST_INSTALLABLE on, chosen by the player."""
+        if self.version_window and self.version_window.winfo_exists():
+            self.version_window.lift()
+            return
+        tk, ttk = self.tk, self.ttk
+        window = tk.Toplevel(self.root)
+        self.version_window = window
+        window.title(_('Other versions', 'Другие версии'))
+        window.configure(bg=BG)
+        window.transient(self.root)
+        window.resizable(False, False)
+        frame = ttk.Frame(window, padding=self.px(16))
+        frame.pack(fill='both', expand=True)
+        ttk.Label(frame, text=_('Install another version of the port, newer or older (back to {}). Saves, settings '
+                                'and mods are kept.', 'Установить другую версию порта, новее или старше (до {}). '
+                                'Сохранения, настройки и моды останутся.').format(OLDEST_INSTALLABLE),
+                  wraplength=self.px(380), justify='left').pack(anchor='w')
+        status = ttk.Label(frame, text=_('Loading the list of versions…', 'Загрузка списка версий…'),
+                           style='Muted.TLabel', wraplength=self.px(380), justify='left')
+        status.pack(anchor='w', pady=(10, 4))
+        box = ttk.Combobox(frame, state='disabled', width=40)
+        box.pack(anchor='w', fill='x')
+        buttons = ttk.Frame(frame)
+        buttons.pack(anchor='w', pady=(12, 0))
+        install = ttk.Button(buttons, text=_('Install', 'Установить'), state='disabled')
+        install.pack(side='left')
+        notes = ttk.Button(buttons, text=_("What's new", 'Что нового'), state='disabled')
+        notes.pack(side='left', padx=6)
+        ttk.Button(buttons, text=_('Close', 'Закрыть'), command=window.destroy).pack(side='left')
+        found = []
+
+        def chosen():
+            index = box.current()
+            return found[index] if 0 <= index < len(found) else None
+
+        def show(versions):
+            if not window.winfo_exists():
+                return
+            found.extend(versions)
+            if not found:
+                status.configure(text=_('No versions found.', 'Версии не найдены.'))
+                return
+            labels = []
+            for version, _url, _page in found:
+                label = f'v{version}'
+                if version == found[0][0]:
+                    label += _(' (latest)', ' (последняя)')
+                if version_tuple(version) == version_tuple(VERSION):
+                    label += _(' (installed)', ' (установлена)')
+                labels.append(label)
+            box.configure(values=labels, state='readonly')
+            current = next((i for i, (v, _u, _p) in enumerate(found)
+                            if version_tuple(v) == version_tuple(VERSION)), 0)
+            box.current(current)
+            status.configure(text=_('Installed: v{}', 'Установлена: v{}').format(VERSION))
+            install.configure(state='normal')
+            notes.configure(state='normal')
+
+        def failed_list(error):
+            if window.winfo_exists():
+                status.configure(text=_('Could not load the list of versions: {}',
+                                        'Не удалось загрузить список версий: {}').format(error))
+
+        def on_install():
+            release = chosen()
+            if not release:
+                return
+            version, url, page = release
+            if version_tuple(version) == version_tuple(VERSION):
+                self.messagebox.showinfo('Bloodborne', _('Version {} is already installed.',
+                                                         'Версия {} уже установлена.').format(version))
+                return
+
+            def progress(percent):
+                if window.winfo_exists():
+                    status.configure(text=_('Downloading version {}… {}%', 'Загрузка версии {}… {}%').format(
+                        version, percent))
+
+            def failed():
+                if window.winfo_exists():
+                    install.configure(state='normal')
+                    box.configure(state='readonly')
+                    status.configure(text=_('Installed: v{}', 'Установлена: v{}').format(VERSION))
+            if self.install_version(version, url, page, progress, failed):
+                install.configure(state='disabled')
+                box.configure(state='disabled')
+
+        install.configure(command=on_install)
+        notes.configure(command=lambda: (release := chosen()) and webbrowser.open(release[2]))
+
+        def fetch():
+            try:
+                versions = installable_releases()
+            except (OSError, ValueError, KeyError, TypeError) as failure:
+                self.ui_calls.put(lambda error=failure: failed_list(error))
+                return
+            self.ui_calls.put(lambda: show(versions))
+        threading.Thread(target=fetch, daemon=True).start()
 
     def clear_cache(self):
         """Shader and pipeline caches; they are rebuilt while playing."""
@@ -2502,6 +2625,28 @@ def latest_release():
     url = next((asset['browser_download_url'] for asset in release.get('assets', [])
                 if asset.get('name', '').lower().endswith('.zip')), None)
     return version, url, release.get('html_url') or RELEASES_PAGE
+
+
+def installable_releases():
+    """[(version, zip URL, page URL)] of the published releases from OLDEST_INSTALLABLE on, newest
+    first (drafts, pre-releases and releases without a zip left out)."""
+    request = urllib.request.Request(RELEASES_LIST_API, headers={'Accept': 'application/vnd.github+json',
+                                                                 'User-Agent': 'bbport-launcher'})
+    with urllib.request.urlopen(request, timeout=15) as response:
+        releases = json.load(response)
+    found = {}
+    for release in releases:
+        tag = release.get('tag_name', '')
+        if release.get('draft') or release.get('prerelease') or not tag.startswith('windows-v'):
+            continue
+        version = '.'.join(re.findall(r'\d+', tag))
+        if not version or version_tuple(version) < version_tuple(OLDEST_INSTALLABLE):
+            continue
+        url = next((asset['browser_download_url'] for asset in release.get('assets', [])
+                    if asset.get('name', '').lower().endswith('.zip')), None)
+        if url and version not in found:
+            found[version] = (version, url, release.get('html_url') or RELEASES_PAGE)
+    return sorted(found.values(), key=lambda item: version_tuple(item[0]), reverse=True)
 
 
 def install_update(target, wait_pid):
