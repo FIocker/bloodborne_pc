@@ -684,6 +684,14 @@ int main(int argc, char **argv) {
     extern void aspect_ratio_bind_image(void *, uint64_t);
     aspect_ratio_bind_image(image,size);
 #endif
+    /* The direct mouse camera (runtime_mouse_camera.c): its own hooks in the follow camera,
+     * placed after the patches, and only on the verified 1.09 image. */
+#if defined(__x86_64__) || defined(_M_X64)
+    extern void mouse_camera_bind_image(void *, uint64_t);
+    mouse_camera_bind_image(image,size);
+    extern void menu_pointer_bind_image(void *, uint64_t);
+    menu_pointer_bind_image(image,size);
+#endif
 #ifdef _WIN32
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
 #endif

@@ -71,21 +71,32 @@ typedef struct {
 typedef struct {
     float deadzone_offset, speed, speed_offset; /* mouse_movement_params; shadPS4 defaults 0.5,1,0.125 */
     int stick; /* 0=none, 1=left, 2=right; mouse_to_joystick */
-    int camera_direct;        /* mouse_camera = direct (1) | stick (0, default) */
-    float camera_sensitivity; /* mouse_camera_sensitivity; 1.0 default */
-    /* Both camera modes, applied to the mouse motion itself: */
-    int invert_x, invert_y;   /* mouse_invert_x / mouse_invert_y = on | off (default) */
-    float sensitivity_y;      /* mouse_sensitivity_y: vertical as a multiple of horizontal, 1.0 */
-    int camera_sync;          /* mouse_camera_sync = on (default) | off: the direct camera turns
-                               * its drawn position too, so a turn is not eased in by a spring */
+    int camera;               /* mouse_camera: MOUSE_CAMERA_OFF/STICK/DIRECT (absent = direct) */
+    int direct_sensitivity;   /* mouse_direct_sensitivity = 0..10, a DS3 sensitivity (5 default) */
+    float camera_sensitivity; /* mouse_camera_sensitivity: a multiplier, 1.0 default */
+    float camera_scale;       /* mouse_camera_scale: a multiplier, 1.0 default */
+    int invert_x, invert_y;   /* mouse_camera_invert_x / mouse_camera_invert_y */
+    int hold_auto_rotation;   /* mouse_hold_auto_rotation: hold the camera's own turns for the mouse */
+    int look_linear;          /* mouse_look_feel: linear (1, default, bbhost's) | legacy (shadPS4's) */
+    float sensitivity_y;
+    int camera_sync; // Compatibility setting; bbhost applies motion in the follow camera.
+    float look_gain;          /* mouse_look_gain: stick units a mouse count, linear feel only */
 } MouseParams;
 
-/* The mouse motion's multipliers from MouseParams: -1 for an inverted axis, the vertical one
- * times sensitivity_y. */
+/* mouse_camera values. Absent, the port uses direct when mouse_to_joystick turns the mouse on:
+ * that is what a PC player expects of a mouse, and an explicit stick/off line keeps the older
+ * behavior. */
+enum { MOUSE_CAMERA_OFF = 0, MOUSE_CAMERA_STICK = 1, MOUSE_CAMERA_DIRECT = 2 };
+
+/* One input that acts beside the outputs (strong, menu_confirm, menu_back): the input a line
+ * names, or IN_NONE when the line is absent or says unmapped. */
+typedef struct {
+    InputKind kind;
+    int32_t value;
+} InputAction;
+
 static inline float input_mouse_scale_x(const MouseParams *m) { return m->invert_x ? -1.0f : 1.0f; }
-static inline float input_mouse_scale_y(const MouseParams *m) {
-    return (m->invert_y ? -1.0f : 1.0f) * m->sensitivity_y;
-}
+static inline float input_mouse_scale_y(const MouseParams *m) { return (m->invert_y ? -1.0f : 1.0f)*m->sensitivity_y; }
 
 typedef struct {
     int inner, outer; /* analog_deadzone; 1..127 each, inner <= outer */
@@ -105,6 +116,10 @@ typedef struct InputConfig {
     int stick_turn_rate;        /* stick_turn_rate = 0..5000 degrees/s (0 = instant, default) */
     int32_t toggle_scancode; /* hotkey_toggle_mouse_to_joystick; SDL_SCANCODE_UNKNOWN = none bound */
     int32_t reload_scancode; /* hotkey_reload_inputs */
+    /* strong: while held, a light attack (r1) is delivered as a strong one (r2). menu_confirm
+     * and menu_back press Cross and Circle while held, for a player who maps those to Enter
+     * and Backspace (the menu pointer's own gating, spec section 4.7). */
+    InputAction strong, menu_confirm, menu_back;
     unsigned warnings;       /* lines ignored during parse, for the startup log line */
 } InputConfig;
 

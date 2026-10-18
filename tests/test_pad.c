@@ -3,6 +3,29 @@
 #include <unistd.h>
 #include "../src/runtime_pad.c"
 
+#ifdef _WIN32
+/* MSYS2 CLANG64 has no setenv/unsetenv (this test is built with GCC on Linux, where they are
+ * POSIX); the CRT's own putenv form is the counterpart, and an empty value removes the name. */
+static int setenv(const char *name, const char *value, int overwrite) {
+    if (!overwrite && getenv(name)) return 0;
+    return _putenv_s(name, value) == 0 ? 0 : -1;
+}
+static int unsetenv(const char *name) { return _putenv_s(name, "") == 0 ? 0 : -1; }
+#endif
+
+/* A template for a temporary file this test owns. build.sh runs the tests from the repository
+ * root and Linux has /tmp; a Windows run uses the CRT's own temp directory. */
+static void TempPath(char *out, size_t size) {
+#ifdef _WIN32
+    const char *dir = getenv("TEMP");
+    if (!dir || !*dir) dir = getenv("TMP");
+    if (!dir || !*dir) dir = ".";
+    snprintf(out, size, "%s/bbport-pad-test-XXXXXX", dir);
+#else
+    snprintf(out, size, "/tmp/bbport-pad-test-XXXXXX");
+#endif
+}
+
 static int capture;
 int bbgpu_overlay_captures_input(void) { return capture; }
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
@@ -20,15 +43,28 @@ void bbgpu_mouse_take(BbMouseInput *out) {
     *out=stub_mouse;
     stub_mouse.dx=stub_mouse.dy=0.0f; /* MOU-008: motion is drained on every take, like the real one */
 }
+/* What the runtime tells the window thread: whether mouse look exists at all (which is what
+ * lets the window capture the mouse) and whether the direct camera should own it. Recorded, so
+ * the tests can check the config-to-window wiring without a window. */
+static int stub_input_configure_calls;
+static int stub_input_configure_mouse_mode;
+static int32_t stub_input_configure_toggle, stub_input_configure_reload;
 void bbgpu_input_configure(int mouse_mode_available, int32_t toggle_scancode, int32_t reload_scancode) {
-    (void)mouse_mode_available; (void)toggle_scancode; (void)reload_scancode;
+    ++stub_input_configure_calls;
+    stub_input_configure_mouse_mode=mouse_mode_available;
+    stub_input_configure_toggle=toggle_scancode;
+    stub_input_configure_reload=reload_scancode;
 }
 static char stub_prompts[20][128];
 void bbgpu_prompts_configure(const char *const *inputs, int count) {
     for (int i=0;i<count && i<20;++i) snprintf(stub_prompts[i],sizeof(stub_prompts[i]),"%s",inputs[i]);
 }
-void bbgpu_mouse_camera_configure(int direct, float sensitivity, float scale_x, float scale_y, int sync) {
-    (void)direct; (void)sensitivity; (void)scale_x; (void)scale_y; (void)sync;
+static int stub_camera_configure_calls;
+static int stub_camera_configure_direct;
+void bbgpu_mouse_camera_configure(int direct, float sensitivity) {
+    (void)sensitivity; /* the window only gates on `direct`; the step gets it every sample */
+    ++stub_camera_configure_calls;
+    stub_camera_configure_direct=direct;
 }
 /* T6: controlled by the tests via stub_reload_requested, draining to 0 on read like the real
  * one (bbgpu_input_reload_requested's own doc comment: "1 once ... then clears back to 0"). */
@@ -49,6 +85,48 @@ void bbgpu_reflex_on_input_sampled(void) {
 }
 void bbgpu_reflex_on_simulation_end(void) {}
 uint64_t bbgpu_reflex_current_sim_frame_id(void) { return 1; }
+
+/* T7: the direct mouse camera (src/runtime_mouse_camera.c) owns the guest hooks and the step;
+ * runtime_pad.c only talks to it through these five calls, so the test owns them. "Installed"
+ * is what makes direct the mouse's route at all (the real one is 1 only on the verified 1.09
+ * image, after every hook site has been read back and matched). */
+static int stub_camera_installed;
+static int stub_camera_flick_on;
+static float stub_camera_flick_x, stub_camera_flick_y;
+static int stub_camera_publishes;
+static int stub_camera_sensitivity, stub_camera_invert_x, stub_camera_invert_y, stub_camera_hold;
+static float stub_camera_multiplier, stub_camera_scale;
+static char stub_camera_route[16];
+int mouse_camera_installed(void) { return stub_camera_installed; }
+int mouse_camera_flick(float *x, float *y) {
+    if (!stub_camera_flick_on) return 0;
+    *x=stub_camera_flick_x; *y=stub_camera_flick_y;
+    return 1;
+}
+void mouse_camera_publish(int sensitivity, float sensitivity_multiplier, float scale,
+                          int invert_x, int invert_y, int hold_auto_rotation) {
+    ++stub_camera_publishes;
+    stub_camera_sensitivity=sensitivity; stub_camera_multiplier=sensitivity_multiplier;
+    stub_camera_scale=scale; stub_camera_invert_x=invert_x; stub_camera_invert_y=invert_y;
+    stub_camera_hold=hold_auto_rotation;
+}
+void mouse_camera_trace(const char *route, float dx, float dy, int stick_x, int stick_y) {
+    (void)dx; (void)dy; (void)stick_x; (void)stick_y;
+    snprintf(stub_camera_route,sizeof(stub_camera_route),"%s",route ? route : "");
+}
+
+/* The game-menu pointer (src/menu_pointer.cpp) is a C++ translation unit this C test does not
+ * link. runtime_pad.c uses it to gate the strong modifier and the menu's confirm/back keys,
+ * and to deliver the pointer's own press; the test drives those three states directly. */
+static int stub_menu_in_menu;
+static int stub_menu_using_controller;
+static uint32_t stub_menu_press;
+int menu_pointer_in_menu(void) { return stub_menu_in_menu; }
+int menu_pointer_using_controller(void) { return stub_menu_using_controller; }
+uint32_t menu_pointer_take_press(void) { uint32_t p=stub_menu_press; stub_menu_press=0; return p; }
+void menu_pointer_pad(uint32_t buttons, uint8_t lx, uint8_t ly) { (void)buttons; (void)lx; (void)ly; }
+uint32_t menu_confirm_button(void) { return 0x4000u; } /* Cross, the region-default decide */
+uint32_t menu_back_button(void) { return 0x2000u; }
 
 static void inject(const char *path, const char *tokens) {
     FILE *f=fopen(path,"w");
@@ -399,7 +477,8 @@ static void test_mouse_buttons_and_wheel(void) {
 /* T5 end to end: a captured mouse moving the right stick through sample_host/pad_read_state,
  * and MOU-006 (mouse bindings are inert while bbgpu_mouse_take reports captured=0). */
 static void test_mouse_end_to_end(void) {
-    char config_path[]="/tmp/bbport-pad-test-mouse-XXXXXX";
+    char config_path[512];
+    TempPath(config_path,sizeof(config_path));
     int fd=mkstemp(config_path);
     assert(fd>=0);
     FILE *f=fdopen(fd,"w");
@@ -429,6 +508,147 @@ static void test_mouse_end_to_end(void) {
     puts("PASS: mouse end to end through pad_read_state (captured gate, right-stick deflection)");
 }
 
+/* T7: the three mouse routes runtime_pad.c can take, and what it publishes to the direct
+ * camera's step. The camera itself is stubbed here (src/runtime_mouse_camera.c owns the guest
+ * hooks, and tests/test_direct_mouse.c covers the step): "installed" is the only thing that
+ * makes direct the mouse's route, and the counts then belong to the camera, not to the stick. */
+static void test_mouse_routes_and_publish(void) {
+    char config_path[512];
+    TempPath(config_path,sizeof(config_path));
+    int fd=mkstemp(config_path);
+    assert(fd>=0);
+    FILE *f=fdopen(fd,"w");
+    assert(f);
+    fputs("mouse_to_joystick = right\n"
+          "mouse_movement_params = 0.5, 1, 0.125\n"
+          "mouse_camera = direct\n"
+          "mouse_direct_sensitivity = 8\n"
+          "mouse_camera_sensitivity = 1.5\n"
+          "mouse_camera_scale = 0.75\n"
+          "mouse_camera_invert_x = on\n"
+          "r1 = leftbutton\n",f);
+    fclose(f);
+    setenv("BB_INPUT_CONFIG",config_path,1);
+    free(loaded_config); config_initialized=0; loaded_config=NULL;
+
+    PadData data;
+    stub_menu_in_menu=0; stub_menu_using_controller=0; stub_menu_press=0;
+    stub_camera_flick_on=0;
+
+    /* Not installed (another game version, or a hook that refused): the direct camera is not
+     * the route, so the counts fall back to the linear stick path. The settings are published
+     * every sample either way, for the step to pick up the moment it is installed. */
+    stub_camera_installed=0;
+    stub_camera_publishes=0;
+    stub_mouse=(BbMouseInput){.dx=50.0f,.dy=0.0f,.buttons=0,.wheel=0,.captured=1};
+    assert(pad_read_state(1,&data)==0);
+    /* Right, inverted: mouse_camera_invert_x flips the stick path too, which is the one this
+     * fallback uses (the camera's own axis sign is the step's business). */
+    assert(data.right_x<128);
+    assert(!strcmp(stub_camera_route,"linear"));
+    assert(stub_camera_publishes>0);
+    assert(stub_camera_sensitivity==8);
+    assert(stub_camera_multiplier>1.49f && stub_camera_multiplier<1.51f);
+    assert(stub_camera_scale>0.74f && stub_camera_scale<0.76f);
+    assert(stub_camera_invert_x==1 && stub_camera_invert_y==0);
+    assert(stub_camera_hold==1); /* mouse_hold_auto_rotation defaults on */
+    assert(stub_camera_configure_direct==1); /* the window gates the camera on this */
+
+    /* Installed: the camera owns the counts, so the right stick does not move at all. */
+    stub_camera_installed=1;
+    stub_mouse=(BbMouseInput){.dx=50.0f,.dy=0.0f,.buttons=0,.wheel=0,.captured=1};
+    assert(pad_read_state(1,&data)==0);
+    assert(data.right_x==128 && data.right_y==128);
+    assert(!strcmp(stub_camera_route,"direct"));
+
+    /* A flick is the one thing the direct route hands the stick: the lock-on switch. */
+    stub_camera_flick_on=1;
+    stub_camera_flick_x=1.0f; stub_camera_flick_y=0.0f;
+    assert(pad_read_state(1,&data)==0);
+    assert(data.right_x>128);
+    stub_camera_flick_on=0;
+
+    /* A controller owns the pointer: the camera's own turns are not held for the mouse. */
+    stub_menu_using_controller=1;
+    stub_mouse=(BbMouseInput){.dx=0.0f,.dy=0.0f,.buttons=0,.wheel=0,.captured=1};
+    assert(pad_read_state(1,&data)==0);
+    assert(stub_camera_hold==0);
+    stub_menu_using_controller=0;
+
+    /* mouse_camera = off: no stick contribution, and the window is told mouse look does not
+     * exist, so it never captures the mouse and no button reaches the pad either. */
+    f=fopen(config_path,"w");
+    assert(f);
+    fputs("mouse_to_joystick = right\nmouse_camera = off\n",f);
+    fclose(f);
+    stub_reload_requested=1;
+    assert(pad_read_state(1,&data)==0);
+    assert(stub_input_configure_mouse_mode==0);
+    assert(stub_camera_configure_direct==0);
+    stub_mouse=(BbMouseInput){.dx=120.0f,.dy=0.0f,.buttons=SDL_BUTTON_MASK(SDL_BUTTON_LEFT),.wheel=0,.captured=1};
+    assert(pad_read_state(1,&data)==0);
+    assert(data.right_x==128 && data.right_y==128);
+    assert(!strcmp(stub_camera_route,"linear")); /* the trace still names the fallback */
+
+    stub_mouse=(BbMouseInput){0};
+    unsetenv("BB_INPUT_CONFIG");
+    unlink(config_path);
+    free(loaded_config); config_initialized=0; loaded_config=NULL;
+    puts("PASS: the mouse's routes and the direct camera's settings (T7)");
+}
+
+/* T7: a game menu takes the pointer, and that is what gates the strong modifier (spec 4.7):
+ * with no menu open, strong + r1 is delivered as r2; in a menu the light attack stays r1 and
+ * the menu's own confirm/back inputs and the pointer's press are added instead. */
+static void test_menu_gating(void) {
+    char config_path[512];
+    TempPath(config_path,sizeof(config_path));
+    int fd=mkstemp(config_path);
+    assert(fd>=0);
+    FILE *f=fdopen(fd,"w");
+    assert(f);
+    fputs("r1 = leftbutton\n"
+          "r2 = rightbutton\n"
+          "strong = middlebutton\n"
+          "menu_confirm = middlebutton\n"
+          "menu_back = sidebuttonback\n",f);
+    fclose(f);
+    setenv("BB_INPUT_CONFIG",config_path,1);
+    free(loaded_config); config_initialized=0; loaded_config=NULL;
+
+    PadData data;
+    stub_camera_installed=0;
+    stub_menu_in_menu=0;
+    stub_menu_press=0;
+    stub_mouse=(BbMouseInput){.dx=0.0f,.dy=0.0f,
+        .buttons=SDL_BUTTON_MASK(SDL_BUTTON_LEFT)|SDL_BUTTON_MASK(SDL_BUTTON_MIDDLE),
+        .wheel=0,.captured=1};
+
+    assert(pad_read_state(1,&data)==0);
+    assert((data.buttons & BTN_R2) && !(data.buttons & BTN_R1) && data.r2==255);
+
+    stub_menu_in_menu=1;
+    stub_mouse.buttons|=SDL_BUTTON_MASK(SDL_BUTTON_X1);
+    assert(pad_read_state(1,&data)==0);
+    assert((data.buttons & BTN_R1) && !(data.buttons & BTN_R2) && data.r2==0);
+    assert((data.buttons & BTN_CROSS) && (data.buttons & BTN_CIRCLE));
+
+    /* The pointer's own click is delivered beside them, and is a press, not a hold. */
+    stub_menu_press=BTN_TOUCHPAD;
+    assert(pad_read_state(1,&data)==0);
+    assert(data.buttons & BTN_TOUCHPAD);
+    assert(pad_read_state(1,&data)==0);
+    assert(!(data.buttons & BTN_TOUCHPAD));
+
+    stub_menu_in_menu=0;
+    stub_menu_press=0;
+    stub_mouse=(BbMouseInput){0};
+    unsetenv("BB_INPUT_CONFIG");
+    unlink(config_path);
+    free(loaded_config); config_initialized=0; loaded_config=NULL;
+    puts("PASS: the menu gates the strong modifier and takes its own presses (T7)");
+}
+
 /* T2: a custom input.ini end to end through pad_read_state -- proves the file is actually
  * found, parsed and wired into sample_host via BB_INPUT_CONFIG, not just that
  * test_binding_evaluation's lower-level calls work in isolation. Keys cannot be held under the
@@ -436,7 +656,8 @@ static void test_mouse_end_to_end(void) {
  * still a real regression guard: a bug in ensure_config_loaded/active_config that crashed, hung,
  * or left stale bindings from the earlier test would show up here. */
 static void test_custom_binding_config(void) {
-    char config_path[]="/tmp/bbport-pad-test-config-XXXXXX";
+    char config_path[512];
+    TempPath(config_path,sizeof(config_path));
     int fd=mkstemp(config_path);
     assert(fd>=0);
     FILE *f=fdopen(fd,"w");
@@ -465,7 +686,8 @@ static void test_custom_binding_config(void) {
  * live binding without restarting the process -- the actual behavior "F8 reloads", not just
  * that the two pieces (input_config_load, reload_config_if_requested) exist in isolation. */
 static void test_reload_on_f8(void) {
-    char config_path[]="/tmp/bbport-pad-test-reload-XXXXXX";
+    char config_path[512];
+    TempPath(config_path,sizeof(config_path));
     int fd=mkstemp(config_path);
     assert(fd>=0);
     FILE *f=fdopen(fd,"w");
@@ -513,7 +735,8 @@ int main(void) {
     test_mouse_to_axis();
     test_mouse_buttons_and_wheel();
 
-    char path[]="/tmp/bbport-pad-test-XXXXXX";
+    char path[512];
+    TempPath(path,sizeof(path));
     int fd=mkstemp(path);
     assert(fd>=0);
     close(fd);
@@ -526,6 +749,8 @@ int main(void) {
     test_custom_binding_config();
     test_reload_on_f8();
     test_mouse_end_to_end();
+    test_mouse_routes_and_publish();
+    test_menu_gating();
     PadData data;
     inject(path,"cross l3 touchpad_left");
     assert(pad_read_state(1,&data)==0);

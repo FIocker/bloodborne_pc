@@ -41,6 +41,11 @@ MAX_LOG_LINES = 6000
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 # This build; GitHub release tags are windows-v<VERSION>.
 VERSION = '1.9.2-fork.2026.10.20'
+COMMUNITY_SERVER = 'https://thehuntersdream.com'
+RELEASES_API = 'https://api.github.com/repos/FIocker/bloodborne_pc/releases/latest'
+RELEASES_PAGE = 'https://github.com/FIocker/bloodborne_pc/releases/latest'
+RELEASES_LIST_API = 'https://api.github.com/repos/FIocker/bloodborne_pc/releases?per_page=100'
+OLDEST_INSTALLABLE = '1.8.2'
 UPDATE_DIR = Path(tempfile.gettempdir()) / 'bbport-update'
 # Never copied over an installation by an update (the package does not hold them either).
 USER_FILES = ('user', 'out', 'mods', 'bbport.ini', 'input.ini', 'mods.json', 'patches.json', 'last_run.log')
@@ -126,7 +131,7 @@ from bbport_input_config import (STICK_OUTPUTS, OUTPUT_LABELS, ACTION_GROUPS, SL
                                   button_num_to_name, input_ini_path, load_input_ini, reserved_keys,
                                   save_input_ini, save_mouse_settings, wheel_to_name, MAX_COMBO,
                                   MODIFIER_NAMES, apply_layout, slot_conflicts, binding_parts,
-                                  display_name)  # noqa: E402
+                                  display_name, bbhost_preset_lines, parse_input_lines)  # noqa: E402
 
 LANG = 'en'
 
@@ -999,6 +1004,7 @@ class Launcher:
         show()
         return self.row(parent, title, holder, hint)
 
+
     def section(self, parent, title, top=18):
         self.ttk.Label(parent, text=title, style='Section.TLabel').grid(
             row=self.next_row(parent), column=0, columnspan=2, sticky='w', pady=(top, 2))
@@ -1364,6 +1370,7 @@ class Launcher:
         self.check(f, 'show_fps', 'ini', _('Show the FPS counter', 'Показывать FPS'))
         self.check(f, 'mute_unfocused', 'ini', _('Mute when the game is in the background',
                                                  'Без звука, когда игра в фоне'))
+
 
     def refresh_nr_hotkey(self):
         self.nr_hotkey_label.configure(text=nr_hotkey_name(self.var('nr_hotkey', 'ini').get()))
@@ -1967,6 +1974,8 @@ class Launcher:
         self.remap_listening = False
         self.mouse_vars = {}  # mouse_settings key -> its widget's variable (apply_layout_preset)
 
+        self.row(f, _('Keyboard & mouse layout'),
+                 ttk.Button(f, text=_('Apply bbhost bindings'), command=self.apply_bbhost_bindings))
         self.row(f, _('Button prompts', 'Подсказки кнопок'), self.choice(f, 'button_prompts', 'ini', PROMPT_MODES),
                  _("The game's button icons: your keyboard and mouse keys while you play with them, "
                    "the controller's (PlayStation, Xbox or Switch) while you use it.",
@@ -2026,7 +2035,7 @@ class Launcher:
                        'действие. Клавиша, которая сама является действием и частью сочетания, '
                        'нажимается по пути к нему: если Shift — это Круг, Shift + левый клик '
                        'начинает бег, который заканчивается уклонением.'))
-        self.note(f, _('Reserved: Insert/Escape (the port\'s menu), F9 (route recording), and '
+        self.note(f, _('Reserved: Insert (the port\'s menu), F9 (route recording), and '
                        'whichever key toggles mouse look or reloads input.ini (F7/F8 by '
                        'default).',
                        'Зарезервированы: Insert/Escape (меню порта), F9 (запись маршрута), а '
@@ -2058,9 +2067,23 @@ class Launcher:
                        variable=stick_var, value='left').pack(side='left', padx=(16, 0))
         self.row(f, _('Mouse controls', 'Мышь управляет'), stick_box)
 
+        self.pc_mouse_vars = {'enabled': enabled_var, 'stick': stick_var}
+        mode_var = tk.StringVar(value=ms['camera_mode'])
+        self.pc_mouse_vars['camera_mode'] = mode_var
+        mode_var.trace_add('write', lambda *_a: (ms.__setitem__('camera_mode', mode_var.get()), mark_mouse_edited()))
+        modes = ttk.Frame(f)
+        ttk.Radiobutton(modes, text=_('Direct camera (bbhost)'), variable=mode_var,
+                        value='direct').pack(side='left')
+        ttk.Radiobutton(modes, text=_('Stick emulation'), variable=mode_var,
+                        value='stick').pack(side='left', padx=(16, 0))
+        self.row(f, _('Camera input'), modes,
+                 _('Direct: raw mouse movement turns the camera once per game frame, without stick '
+                   'acceleration. Lock-on uses target-switch flicks. Requires the supported 1.09 executable.'))
+
         def slider_row(key, title, hint, lo, hi, fmt='{:.2f}'):
             holder = ttk.Frame(f)
             var = self.mouse_vars[key] = tk.DoubleVar(value=ms[key])
+            self.pc_mouse_vars[key] = var
             ttk.Scale(holder, from_=lo, to=hi, variable=var, length=280).pack(side='left')
             value_label = ttk.Label(holder, width=6)
             value_label.pack(side='left', padx=10)
@@ -2074,26 +2097,36 @@ class Launcher:
         # (src/runtime_pad.c), which deadzone_offset no longer affects, so the slider for it was
         # removed here rather than leave a control with no real effect. The value is still read/
         # written in input.ini by bbport_input_config.py for files that already set it.
-        camera_var = self.mouse_vars['camera'] = tk.StringVar(value=ms['camera'])
-        camera_var.trace_add('write', lambda *_a: (ms.__setitem__('camera', camera_var.get()), mark_mouse_edited()))
-        camera_box = ttk.Frame(f)
-        ttk.Radiobutton(camera_box, text=_('Direct (1:1, like a PC game)', 'Прямая (1:1, как в ПК-играх)'),
-                       variable=camera_var, value='direct').pack(side='left')
-        ttk.Radiobutton(camera_box, text=_('Stick emulation', 'Эмуляция стика'),
-                       variable=camera_var, value='stick').pack(side='left', padx=(16, 0))
-        self.row(f, _('Camera', 'Камера'), camera_box,
-                 _('Direct turns the game\'s camera by exact angles: no stick acceleration or '
-                   'turn-speed cap. It falls back to the stick while locked on.',
-                   'Прямая поворачивает камеру игры на точные углы: без ускорения стика и '
-                   'предела скорости поворота. При захвате цели работает как стик.'))
-        slider_row('camera_sensitivity', _('Sensitivity (direct)', 'Чувствительность (прямая)'),
-                   _('How far the direct camera turns per mouse movement (1.00 = 900 counts per '
-                     'radian).', 'Насколько поворачивается прямая камера при движении мыши (1.00 = '
-                     '900 отсчётов на радиан).'), 0.1, 5.0)
-        slider_row('speed', _('Sensitivity (stick)', 'Чувствительность (стик)'),
-                   _('How fast the camera turns for a given mouse movement in stick emulation.',
-                     'Насколько быстро поворачивается камера при движении мыши в эмуляции стика.'), 0.1, 5.0)
-        slider_row('speed_offset', _('Minimum turn speed (stick)', 'Минимальная скорость поворота (стик)'),
+        slider_row('direct_sensitivity', _('Direct camera sensitivity'),
+                   _('0–10; 5 is 0.25 degrees per mouse count. This is independent of frame rate.'),
+                   0, 10)
+        slider_row('camera_sensitivity', _('Direct camera multiplier'),
+                   _('Fine adjustment on top of direct sensitivity; 1.0 keeps the base sensitivity.'),
+                   0.05, 4.0)
+        for key, caption in (('invert_x', _('Invert mouse X')), ('invert_y', _('Invert mouse Y')),
+                              ('hold_auto_rotation', _('Hold automatic camera rotation while using the mouse'))):
+            flag = tk.BooleanVar(value=ms[key])
+            self.pc_mouse_vars[key] = flag
+            flag.trace_add('write', lambda *_a, k=key, v=flag:
+                           (ms.__setitem__(k, v.get()), mark_mouse_edited()))
+            ttk.Checkbutton(f, text=caption, variable=flag).grid(
+                row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(4, 0))
+
+        self.section(f, _('Stick emulation settings'))
+        feel_var = tk.StringVar(value=ms['look_feel'])
+        self.pc_mouse_vars['look_feel'] = feel_var
+        feel_var.trace_add('write', lambda *_a: (ms.__setitem__('look_feel', feel_var.get()), mark_mouse_edited()))
+        feel = ttk.Frame(f)
+        ttk.Radiobutton(feel, text=_('Linear'), variable=feel_var, value='linear').pack(side='left')
+        ttk.Radiobutton(feel, text=_('Legacy acceleration'), variable=feel_var,
+                        value='legacy').pack(side='left', padx=(16, 0))
+        self.row(f, _('Stick response'), feel,
+                 _('These settings apply to stick emulation, not the direct camera.'))
+        slider_row('look_gain', _('Linear stick gain'), _('Stick units per mouse count.'), 0.05, 5.0)
+        slider_row('speed', _('Legacy sensitivity', 'Чувствительность'),
+                   _('How fast the camera turns for a given mouse movement.',
+                     'Насколько быстро поворачивается камера при движении мыши.'), 0.1, 5.0)
+        slider_row('speed_offset', _('Legacy minimum turn speed', 'Минимальная скорость поворота'),
                    _('A constant added on top of sensitivity; raises the floor for slow '
                      'movements without affecting fast ones as much.',
                      'Добавляется поверх чувствительности; поднимает минимальную скорость для '
@@ -2148,6 +2181,15 @@ class Launcher:
             var.set(mouse[key])
         self.mouse_edited = False
         self.refresh_remap_row(None)
+
+    def apply_bbhost_bindings(self):
+        """Stage an explicit PC-layout replacement; saving remains the normal collect() path."""
+        self.remap_lines = bbhost_preset_lines(self.remap_lines)
+        self.remap_bindings, *_ = parse_input_lines(self.remap_lines)
+        self.remap_edits = {output: values[0] if values else None
+                            for output, values in self.remap_bindings.items()}
+        for output in self.remap_rows:
+            self.refresh_remap_row(output)
 
     def refresh_remap_row(self, output):
         """Every row, since a change to one binding can add or clear another's conflict mark."""
@@ -2549,14 +2591,18 @@ class Launcher:
             save_input_ini(self.remap_ini_path, {key: [v for v in values if v]
                                                  for key, values in self.remap_edits.items()}, self.remap_lines)
             self.remap_bindings, self.remap_lines, self.remap_toggle_key, self.remap_reload_key, \
-                self.mouse_settings = load_input_ini(self.remap_ini_path)
+                reloaded_mouse = load_input_ini(self.remap_ini_path)
+            if not self.mouse_edited:
+                self.mouse_settings.update(reloaded_mouse)
             self.remap_edits = {}
             if getattr(self, 'remap_rows', None):
                 self.refresh_remap_row(None)  # emptied slots close up, as the file has them
         if self.mouse_edited:
             save_mouse_settings(self.remap_ini_path, self.mouse_settings, self.remap_lines)
             self.remap_bindings, self.remap_lines, self.remap_toggle_key, self.remap_reload_key, \
-                self.mouse_settings = load_input_ini(self.remap_ini_path)
+                reloaded_mouse = load_input_ini(self.remap_ini_path)
+            # Widgets retain this dictionary in their callbacks; keep its identity after Save.
+            self.mouse_settings.update(reloaded_mouse)
             self.mouse_edited = False
         if self.mod_order:
             (DATA_DIR / 'mods.json').write_text(json.dumps(

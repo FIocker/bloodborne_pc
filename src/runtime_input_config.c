@@ -295,16 +295,23 @@ static void ParseMouseToJoystick(InputConfig *cfg, const char *value) {
     else ++cfg->warnings;
 }
 
-/* mouse_camera = direct|stick: direct writes the game's camera angles from mouse motion
- * (gpu/shim/bloodborne_cam.cpp, game 1.09), stick keeps the mouse-to-joystick emulation.
- * Direct still needs mouse_to_joystick (it is the stick used while locked on). */
+/* mouse_camera = off|stick|direct: direct writes the game's camera angles from mouse motion
+ * (runtime_mouse_camera.c, game 1.09), stick keeps the mouse-to-joystick emulation, off
+ * leaves the camera to the pad. Absent, direct is the mode, and an explicit line always wins.
+ * Direct still needs mouse_to_joystick (it is how the mouse look is turned on and off). */
 static void ParseMouseCamera(InputConfig *cfg, const char *value) {
-    if (EqualsCaseInsensitive(value, "direct")) cfg->mouse.camera_direct = 1;
-    else if (EqualsCaseInsensitive(value, "stick")) cfg->mouse.camera_direct = 0;
+    if (EqualsCaseInsensitive(value, "direct")) cfg->mouse.camera = MOUSE_CAMERA_DIRECT;
+    else if (EqualsCaseInsensitive(value, "stick") || EqualsCaseInsensitive(value, "legacy"))
+        cfg->mouse.camera = MOUSE_CAMERA_STICK;
+    else if (EqualsCaseInsensitive(value, "off") || EqualsCaseInsensitive(value, "none") ||
+             EqualsCaseInsensitive(value, "disabled"))
+        cfg->mouse.camera = MOUSE_CAMERA_OFF;
     else ++cfg->warnings;
 }
 
-/* mouse_camera_sensitivity = multiplier for the direct camera (1.0 = 900 counts per radian). */
+/* mouse_camera_sensitivity = a multiplier on the direct camera's step (0.05..20, 1.0 default).
+ * Files written before the DS3 sensitivity existed set this instead; mouse_direct_sensitivity
+ * is the scale to use now, and both are applied. */
 static void ParseMouseCameraSensitivity(InputConfig *cfg, const char *value) {
     int ok;
     float v = ParseFloatStrict(value, &ok);
@@ -325,6 +332,91 @@ static void ParseMouseSensitivityY(InputConfig *cfg, const char *value) {
     float v = ParseFloatStrict(value, &ok);
     if (!ok || v < 0.1f || v > 10.0f) { ++cfg->warnings; return; }
     cfg->mouse.sensitivity_y = v;
+}
+
+/* mouse_camera_scale = a second multiplier on the direct camera's step (0.05..20, 1.0
+ * default), for a player who wants finer control than the DS3 0..10 scale gives. */
+static void ParseMouseCameraScale(InputConfig *cfg, const char *value) {
+    int ok;
+    float v = ParseFloatStrict(value, &ok);
+    if (!ok || v < 0.05f || v > 20.0f) { ++cfg->warnings; return; }
+    cfg->mouse.camera_scale = v;
+}
+
+/* mouse_direct_sensitivity = 0..10, Dark Souls III's own sensitivity scale for the direct
+ * camera (5 default: 0.25 degrees a mouse count). */
+static void ParseMouseDirectSensitivity(InputConfig *cfg, const char *value) {
+    int ok;
+    float v = ParseFloatStrict(value, &ok);
+    if (!ok || v < 0 || v > 10) { ++cfg->warnings; return; }
+    cfg->mouse.direct_sensitivity = (int)(v + 0.5f);
+}
+
+/* mouse_camera_invert_x / mouse_camera_invert_y = 0|1 (on/off also accepted): flip that axis
+ * of the mouse's camera motion, direct and stick alike (runtime_pad.c, runtime_mouse_camera.c). */
+static int ParseBoolValue(const char *value, int *out);
+static void ParseMouseInvert(InputConfig *cfg, const char *value, int axis_x) {
+    int on = 0;
+    if (!ParseBoolValue(value, &on)) { ++cfg->warnings; return; }
+    if (axis_x) cfg->mouse.invert_x = on;
+    else cfg->mouse.invert_y = on;
+}
+
+/* mouse_hold_auto_rotation = 0|1 (1 by default): while the mouse turns the camera, hold the
+ * camera's own turns as the character moves (runtime_mouse_camera.c's hold sites). */
+static void ParseMouseHoldAutoRotation(InputConfig *cfg, const char *value) {
+    int on = 0;
+    if (!ParseBoolValue(value, &on)) { ++cfg->warnings; return; }
+    cfg->mouse.hold_auto_rotation = on;
+}
+
+/* mouse_look_feel = linear|legacy: how mouse motion becomes the right stick when the direct
+ * camera is not the route. linear (default) is bbhost's: the counts are added to the stick
+ * with no dead zone, no acceleration and no smoothing. legacy is the shadPS4 EmulateJoystick
+ * formula this port used before (runtime_pad.c, mouse_to_axis). */
+static void ParseMouseLookFeel(InputConfig *cfg, const char *value) {
+    if (EqualsCaseInsensitive(value, "linear")) cfg->mouse.look_linear = 1;
+    else if (EqualsCaseInsensitive(value, "legacy")) cfg->mouse.look_linear = 0;
+    else ++cfg->warnings;
+}
+
+/* mouse_look_gain = 0.01..20 (1.1 default): stick units added per mouse count in the linear
+ * feel, before the stick's own clamping. */
+static void ParseMouseLookGain(InputConfig *cfg, const char *value) {
+    int ok;
+    float v = ParseFloatStrict(value, &ok);
+    if (!ok || v < 0.01f || v > 20.0f) { ++cfg->warnings; return; }
+    cfg->mouse.look_gain = v;
+}
+
+/* 0/1, on/off, true/false, yes/no: the forms a hand-edited file or the launcher may write. */
+static int ParseBoolValue(const char *value, int *out) {
+    if (EqualsCaseInsensitive(value, "1") || EqualsCaseInsensitive(value, "on") ||
+        EqualsCaseInsensitive(value, "true") || EqualsCaseInsensitive(value, "yes")) {
+        *out = 1;
+        return 1;
+    }
+    if (EqualsCaseInsensitive(value, "0") || EqualsCaseInsensitive(value, "off") ||
+        EqualsCaseInsensitive(value, "false") || EqualsCaseInsensitive(value, "no")) {
+        *out = 0;
+        return 1;
+    }
+    return 0;
+}
+
+/* strong / menu_confirm / menu_back = one input (a key, a mouse button or a controller
+ * button). "unmapped" leaves the action unbound. */
+static void ParseActionInput(InputAction *action, const char *value, unsigned *warnings) {
+    InputBinding binding;
+    if (!ResolveInput(value, &binding)) { ++*warnings; return; }
+    if (binding.kind != IN_NONE && binding.kind != IN_KEY && binding.kind != IN_MOUSE_BUTTON &&
+        binding.kind != IN_MOUSE_WHEEL && binding.kind != IN_CBUTTON) {
+        /* An axis or a half axis cannot be held as a key-like action. */
+        ++*warnings;
+        return;
+    }
+    action->kind = binding.kind;
+    action->value = binding.value;
 }
 
 /* stick_socd = last|neutral: what two opposite directions held together give (runtime_pad.c,
@@ -448,6 +540,58 @@ static void ParseLine(ParseState *state, char *line) {
         ParseMouseSensitivityY(cfg, input_raw);
         return;
     }
+    if (EqualsCaseInsensitive(output_raw, "mouse_direct_sensitivity")) {
+        if (!state->hotkeys_pass) return;
+        ParseMouseDirectSensitivity(cfg, input_raw);
+        return;
+    }
+    if (EqualsCaseInsensitive(output_raw, "mouse_camera_scale")) {
+        if (!state->hotkeys_pass) return;
+        ParseMouseCameraScale(cfg, input_raw);
+        return;
+    }
+    if (EqualsCaseInsensitive(output_raw, "mouse_camera_invert_x")) {
+        if (!state->hotkeys_pass) return;
+        ParseMouseInvert(cfg, input_raw, 1);
+        return;
+    }
+    if (EqualsCaseInsensitive(output_raw, "mouse_camera_invert_y")) {
+        if (!state->hotkeys_pass) return;
+        ParseMouseInvert(cfg, input_raw, 0);
+        return;
+    }
+    if (EqualsCaseInsensitive(output_raw, "mouse_hold_auto_rotation")) {
+        if (!state->hotkeys_pass) return;
+        ParseMouseHoldAutoRotation(cfg, input_raw);
+        return;
+    }
+    if (EqualsCaseInsensitive(output_raw, "mouse_look_feel")) {
+        if (!state->hotkeys_pass) return;
+        ParseMouseLookFeel(cfg, input_raw);
+        return;
+    }
+    if (EqualsCaseInsensitive(output_raw, "mouse_look_gain")) {
+        if (!state->hotkeys_pass) return;
+        ParseMouseLookGain(cfg, input_raw);
+        return;
+    }
+    /* Actions beside the outputs: a light attack's strong modifier and the menu's two buttons
+     * (spec section 4.7). Each takes one input, with the same names a binding takes. */
+    if (EqualsCaseInsensitive(output_raw, "strong")) {
+        if (!state->hotkeys_pass) return;
+        ParseActionInput(&cfg->strong, input_raw, &cfg->warnings);
+        return;
+    }
+    if (EqualsCaseInsensitive(output_raw, "menu_confirm")) {
+        if (!state->hotkeys_pass) return;
+        ParseActionInput(&cfg->menu_confirm, input_raw, &cfg->warnings);
+        return;
+    }
+    if (EqualsCaseInsensitive(output_raw, "menu_back")) {
+        if (!state->hotkeys_pass) return;
+        ParseActionInput(&cfg->menu_back, input_raw, &cfg->warnings);
+        return;
+    }
     if (EqualsCaseInsensitive(output_raw, "stick_socd")) {
         if (!state->hotkeys_pass) return;
         ParseStickSocd(cfg, input_raw);
@@ -561,10 +705,17 @@ void input_config_parse(InputConfig *out, const char *text) {
     out->mouse.speed = 1.0f;
     out->mouse.speed_offset = 0.125f;
     out->mouse.stick = 0;
-    out->mouse.camera_direct = 0;
+    out->mouse.camera = MOUSE_CAMERA_DIRECT;
+    out->mouse.direct_sensitivity = 5;
     out->mouse.camera_sensitivity = 1.0f;
     out->mouse.sensitivity_y = 1.0f;
     out->mouse.camera_sync = 1;
+    out->mouse.camera_scale = 1.0f;
+    out->mouse.invert_x = 0;
+    out->mouse.invert_y = 0;
+    out->mouse.hold_auto_rotation = 1;
+    out->mouse.look_linear = 1;
+    out->mouse.look_gain = 1.1f;
     for (int i = 0; i < DEADZONE_COUNT; ++i) { out->deadzone[i].inner = 1; out->deadzone[i].outer = 127; }
     out->stick_socd_last = 1;
     /* Defaults that keep a keyboard sprint through direction changes (cassioKenji, PR #74). */

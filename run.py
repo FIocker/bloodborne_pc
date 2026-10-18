@@ -267,6 +267,11 @@ def main():
         sys.path.insert(0, str(PORT / 'scripts'))
         from aspect_ratio import segment_fingerprint
         env['BB_ASPECT_EBOOT_SEGMENTS'] = segment_fingerprint((out / 'eboot.elf').read_bytes())
+        # The direct input hooks (the mouse camera in src/runtime_mouse_camera.c, the menu
+        # pointer) guard on the same fingerprint at every resolution: the aspect-ratio hooks
+        # are the only ones that only run at other-than-16:9 sizes. Taken from the eboot as
+        # prepare.py decoded it, before the patches, so it names the game image itself.
+        env['BB_INPUT_EBOOT_SEGMENTS'] = env['BB_ASPECT_EBOOT_SEGMENTS']
         run_script('link_libc.py', game, '--out', out)
         run_script('link_modules.py', game, '--out', out)
         # Legacy CPU profile (scripts/cpu_compat.py): the image no longer needs BMI1, LZCNT or

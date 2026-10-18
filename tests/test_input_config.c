@@ -12,6 +12,16 @@
 #include <unistd.h>
 #include <SDL3/SDL.h>
 
+#ifdef _WIN32
+/* MSYS2 CLANG64 has no setenv/unsetenv (this test is built with GCC on Linux, where they are
+ * POSIX); the CRT's own putenv form is the counterpart, and an empty value removes the name. */
+static int setenv(const char *name, const char *value, int overwrite) {
+    if (!overwrite && getenv(name)) return 0;
+    return _putenv_s(name, value) == 0 ? 0 : -1;
+}
+static int unsetenv(const char *name) { return _putenv_s(name, "") == 0 ? 0 : -1; }
+#endif
+
 static int BindingCountFor(const InputConfig *cfg, InputOutput out) {
     return cfg->table.binding_count[out];
 }
@@ -28,6 +38,19 @@ static int HasCButtonBinding(const InputConfig *cfg, InputOutput out, int button
         if (b->kind == IN_CBUTTON && b->value == button) return 1;
     }
     return 0;
+}
+
+/* A template for a temporary file this test owns. build.sh runs the tests from the repository
+ * root and Linux has /tmp; a Windows run uses the CRT's own temp directory. */
+static void TempPath(char *out, size_t size) {
+#ifdef _WIN32
+    const char *dir = getenv("TEMP");
+    if (!dir || !*dir) dir = getenv("TMP");
+    if (!dir || !*dir) dir = ".";
+    snprintf(out, size, "%s/bbport-input-test-XXXXXX", dir);
+#else
+    snprintf(out, size, "/tmp/bbport-input-test-XXXXXX");
+#endif
 }
 
 /* AC-001-equivalent at the parser level: one binding, exactly the key asked for. */
@@ -203,29 +226,134 @@ static void TestMouseMovementParams(void) {
     assert(incomplete.mouse.speed > 0.99f && incomplete.mouse.speed < 1.01f); /* default kept */
 }
 
-/* mouse_camera / mouse_camera_sensitivity: direct camera opt-in, stick is the default. */
+/* mouse_camera (off | stick | direct), mouse_direct_sensitivity (DS3's 0..10 scale) and the
+ * port's two multipliers. Absent, direct is the mode: the mouse drives the camera, and an
+ * explicit line always wins. */
 static void TestMouseCamera(void) {
     InputConfig def;
     input_config_parse(&def, "mouse_to_joystick = right\n");
-    assert(def.mouse.camera_direct == 0);
+    assert(def.mouse.camera == MOUSE_CAMERA_DIRECT);
+    assert(def.mouse.direct_sensitivity == 5);
     assert(def.mouse.camera_sensitivity > 0.99f && def.mouse.camera_sensitivity < 1.01f);
+    assert(def.mouse.camera_scale > 0.99f && def.mouse.camera_scale < 1.01f);
 
     InputConfig cfg;
-    input_config_parse(&cfg, "mouse_camera = Direct\nmouse_camera_sensitivity = 1.75\n");
+    input_config_parse(&cfg, "mouse_camera = Direct\nmouse_direct_sensitivity = 7\n"
+                             "mouse_camera_sensitivity = 1.75\nmouse_camera_scale = 0.5\n");
     assert(cfg.warnings == 0);
-    assert(cfg.mouse.camera_direct == 1);
+    assert(cfg.mouse.camera == MOUSE_CAMERA_DIRECT);
+    assert(cfg.mouse.direct_sensitivity == 7);
     assert(cfg.mouse.camera_sensitivity > 1.74f && cfg.mouse.camera_sensitivity < 1.76f);
+    assert(cfg.mouse.camera_scale > 0.49f && cfg.mouse.camera_scale < 0.51f);
 
+    /* The DS3 scale is a 0..10 integer: a fraction is rounded, like the launcher's slider. */
+    InputConfig rounded;
+    input_config_parse(&rounded, "mouse_direct_sensitivity = 6.4\n");
+    assert(rounded.warnings == 0);
+    assert(rounded.mouse.direct_sensitivity == 6);
+
+    /* The last explicit line wins, and the older names mean the same modes. */
     InputConfig back;
     input_config_parse(&back, "mouse_camera = direct\nmouse_camera = stick\n");
     assert(back.warnings == 0);
-    assert(back.mouse.camera_direct == 0);
+    assert(back.mouse.camera == MOUSE_CAMERA_STICK);
+
+    InputConfig legacy;
+    input_config_parse(&legacy, "mouse_camera = legacy\n");
+    assert(legacy.warnings == 0);
+    assert(legacy.mouse.camera == MOUSE_CAMERA_STICK);
+
+    InputConfig off;
+    input_config_parse(&off, "mouse_camera = off\n");
+    assert(off.warnings == 0);
+    assert(off.mouse.camera == MOUSE_CAMERA_OFF);
 
     InputConfig bad;
-    input_config_parse(&bad, "mouse_camera = gyro\nmouse_camera_sensitivity = 0\nmouse_camera_sensitivity = fast\n");
-    assert(bad.warnings == 3);
-    assert(bad.mouse.camera_direct == 0);
-    assert(bad.mouse.camera_sensitivity > 0.99f && bad.mouse.camera_sensitivity < 1.01f); /* default kept */
+    input_config_parse(&bad, "mouse_camera = gyro\nmouse_direct_sensitivity = 11\n"
+                             "mouse_direct_sensitivity = fast\nmouse_camera_scale = 0\n"
+                             "mouse_camera_sensitivity = 0\n");
+    assert(bad.warnings == 5);
+    assert(bad.mouse.camera == MOUSE_CAMERA_DIRECT); /* default kept */
+    assert(bad.mouse.direct_sensitivity == 5);
+    assert(bad.mouse.camera_sensitivity > 0.99f && bad.mouse.camera_sensitivity < 1.01f);
+    assert(bad.mouse.camera_scale > 0.99f && bad.mouse.camera_scale < 1.01f);
+}
+
+/* The direct camera's two axes, its hold of the camera's own turns, and the two settings the
+ * mouse-to-stick path uses when direct is not the route. */
+static void TestMouseCameraAxesAndLookFeel(void) {
+    InputConfig def;
+    input_config_parse(&def, "cross = space\n");
+    assert(def.mouse.invert_x == 0 && def.mouse.invert_y == 0);
+    assert(def.mouse.hold_auto_rotation == 1);
+    assert(def.mouse.look_linear == 1);
+    assert(def.mouse.look_gain > 1.09f && def.mouse.look_gain < 1.11f);
+
+    InputConfig cfg;
+    input_config_parse(&cfg, "mouse_camera_invert_x = on\nmouse_camera_invert_y = 1\n"
+                             "mouse_hold_auto_rotation = off\nmouse_look_feel = Legacy\n"
+                             "mouse_look_gain = 2.5\n");
+    assert(cfg.warnings == 0);
+    assert(cfg.mouse.invert_x == 1 && cfg.mouse.invert_y == 1);
+    assert(cfg.mouse.hold_auto_rotation == 0);
+    assert(cfg.mouse.look_linear == 0);
+    assert(cfg.mouse.look_gain > 2.49f && cfg.mouse.look_gain < 2.51f);
+
+    /* Every boolean form the file or the launcher may write, and a cleared axis. */
+    InputConfig forms;
+    input_config_parse(&forms, "mouse_camera_invert_x = yes\nmouse_camera_invert_x = no\n"
+                               "mouse_camera_invert_y = true\nmouse_hold_auto_rotation = false\n");
+    assert(forms.warnings == 0);
+    assert(forms.mouse.invert_x == 0 && forms.mouse.invert_y == 1);
+    assert(forms.mouse.hold_auto_rotation == 0);
+
+    InputConfig bad;
+    input_config_parse(&bad, "mouse_camera_invert_x = maybe\nmouse_hold_auto_rotation = 2\n"
+                             "mouse_look_feel = smoothed\nmouse_look_gain = 0\n");
+    assert(bad.warnings == 4);
+    assert(bad.mouse.invert_x == 0);          /* default kept */
+    assert(bad.mouse.hold_auto_rotation == 1);
+    assert(bad.mouse.look_linear == 1);
+    assert(bad.mouse.look_gain > 1.09f && bad.mouse.look_gain < 1.11f);
+}
+
+/* Section 4.7: strong / menu_confirm / menu_back each take one input - a key, a mouse button,
+ * a wheel direction or a controller button. An axis cannot be held as a key-like action, and
+ * "unmapped" clears one without a warning. */
+static void TestActionLines(void) {
+    InputConfig def;
+    input_config_parse(&def, "cross = space\n");
+    assert(def.strong.kind == IN_NONE && def.menu_confirm.kind == IN_NONE &&
+           def.menu_back.kind == IN_NONE);
+
+    InputConfig cfg;
+    input_config_parse(&cfg, "strong = lshift\nmenu_confirm = enter\nmenu_back = backspace\n");
+    assert(cfg.warnings == 0);
+    assert(cfg.strong.kind == IN_KEY && cfg.strong.value == SDL_SCANCODE_LSHIFT);
+    assert(cfg.menu_confirm.kind == IN_KEY && cfg.menu_confirm.value == SDL_SCANCODE_RETURN);
+    assert(cfg.menu_back.kind == IN_KEY && cfg.menu_back.value == SDL_SCANCODE_BACKSPACE);
+
+    /* A controller button, a mouse button and a wheel direction are all key-like enough. */
+    InputConfig devices;
+    input_config_parse(&devices, "strong = r1\nmenu_confirm = leftbutton\n"
+                                 "menu_back = mousewheeldown\n");
+    assert(devices.warnings == 0);
+    assert(devices.strong.kind == IN_CBUTTON &&
+           devices.strong.value == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
+    assert(devices.menu_confirm.kind == IN_MOUSE_BUTTON &&
+           devices.menu_confirm.value == SDL_BUTTON_LEFT);
+    assert(devices.menu_back.kind == IN_MOUSE_WHEEL);
+
+    InputConfig cleared;
+    input_config_parse(&cleared, "strong = lshift\nstrong = unmapped\n");
+    assert(cleared.warnings == 0);
+    assert(cleared.strong.kind == IN_NONE);
+
+    InputConfig bad;
+    input_config_parse(&bad, "strong = axis_left_y\nmenu_back = banana\n");
+    assert(bad.warnings == 2);
+    assert(bad.strong.kind == IN_NONE);   /* an axis is not a key-like action */
+    assert(bad.menu_back.kind == IN_NONE);
 }
 
 /* Escape is bindable (the overlay only uses it to close an open menu or cancel text entry,
@@ -358,7 +486,8 @@ static void TestShadps4DefaultFileImports(void) {
 
 /* CFG-002: a missing file is created with the default text and still loads correctly. */
 static void TestLoadCreatesMissingFile(void) {
-    char path[] = "/tmp/bbport-input-test-XXXXXX";
+    char path[512];
+    TempPath(path, sizeof(path));
     int fd = mkstemp(path);
     assert(fd >= 0);
     close(fd);
@@ -377,7 +506,8 @@ static void TestLoadCreatesMissingFile(void) {
  * file: mouse lines only. Loading it adds the default controller and keyboard lines, to the
  * file as well; a file with both kinds is left as it is. */
 static void TestLoadRestoresMissingControllerAndKeyboard(void) {
-    char path[] = "/tmp/bbport-input-test-XXXXXX";
+    char path[512];
+    TempPath(path, sizeof(path));
     int fd = mkstemp(path);
     assert(fd >= 0);
     static const char mouse_only[] = "mouse_to_joystick = right\nmouse_movement_params = 0.5, 1, 0.125";
@@ -442,6 +572,8 @@ int main(void) {
     TestMouseToJoystick();
     TestMouseMovementParams();
     TestMouseCamera();
+    TestMouseCameraAxesAndLookFeel();
+    TestActionLines();
     TestEscapeBindable();
     TestStickSocdAndReleaseDelay();
     TestStickCircularAndTurnRate();

@@ -8,13 +8,15 @@ launcher's remap page edits, up to SLOTS per action, plus walk (leftjoystick_hal
 Controller bindings are preserved untouched (round-tripped as unknown lines by save_input_ini),
 not edited here.
 """
+import math
 import os
 from pathlib import Path
 
 # Keyboard-only outputs the remap page edits. (action key in the .ini, Tk display order).
 BUTTON_OUTPUTS = ['cross', 'circle', 'square', 'triangle', 'l1', 'r1', 'l2', 'r2', 'l3', 'r3',
                    'options', 'pad_up', 'pad_down', 'pad_left', 'pad_right',
-                   'touchpad_left', 'touchpad_right']
+                   'touchpad_left', 'touchpad_right', 'strong', 'leftjoystick_halfmode',
+                   'menu_confirm', 'menu_back']
 STICK_OUTPUTS = ['axis_left_x_minus', 'axis_left_x_plus', 'axis_left_y_minus', 'axis_left_y_plus',
                   'axis_right_x_minus', 'axis_right_x_plus', 'axis_right_y_minus', 'axis_right_y_plus']
 # Held like a button, read as a modifier of the left stick (walk).
@@ -37,6 +39,9 @@ OUTPUT_LABELS = {
     'pad_left': ('D-pad left', 'Крестовина влево'), 'pad_right': ('D-pad right', 'Крестовина вправо'),
     'touchpad_left': ('Touchpad (left click)', 'Тачпад (левый клик)'),
     'touchpad_right': ('Touchpad (right click)', 'Тачпад (правый клик)'),
+    'strong': ('Strong attack modifier',),
+    'leftjoystick_halfmode': ('Walk modifier',),
+    'menu_confirm': ('Menu confirm',), 'menu_back': ('Menu back',),
     'axis_left_x_minus': ('Move left', 'Движение влево'), 'axis_left_x_plus': ('Move right', 'Движение вправо'),
     'axis_left_y_minus': ('Move forward', 'Движение вперёд'), 'axis_left_y_plus': ('Move back', 'Движение назад'),
     'axis_right_x_minus': ('Camera left', 'Камера влево'), 'axis_right_x_plus': ('Camera right', 'Камера вправо'),
@@ -429,17 +434,52 @@ def apply_layout(lines, layout=DS3_LAYOUT):
 # shadPS4/bbport defaults when mouse_movement_params is absent (spec section 4.2 / 4.3).
 MOUSE_SETTINGS_DEFAULTS = {'enabled': False, 'stick': 'right',
                             'deadzone_offset': 0.5, 'speed': 1.0, 'speed_offset': 0.125,
-                            'invert_x': False, 'invert_y': False, 'sensitivity_y': 1.0,
-                            'camera': 'stick', 'camera_sensitivity': 1.0}
+                            'camera_mode': 'direct', 'direct_sensitivity': 5.0,
+                            'camera_sensitivity': 1.0, 'camera_scale': 1.0,
+                            'invert_x': False, 'invert_y': False, 'hold_auto_rotation': True,
+                            'look_feel': 'linear', 'look_gain': 1.1, 'sensitivity_y': 1.0, 'camera_sync': True}
 # The one-value mouse lines (src/runtime_input_config.c), written only when not the default.
 MOUSE_SIMPLE_LINES = {'invert_x': 'mouse_invert_x', 'invert_y': 'mouse_invert_y',
-                      'sensitivity_y': 'mouse_sensitivity_y', 'camera': 'mouse_camera',
+                      'sensitivity_y': 'mouse_sensitivity_y', 'camera_mode': 'mouse_camera',
                       'camera_sensitivity': 'mouse_camera_sensitivity'}
+
+
+# The old direct-camera multiplier keeps its own key; DS3's 0..10 scale is separate.
+MOUSE_EXTRA_KEYS = {
+    'mouse_camera': ('camera_mode', ('direct', 'stick', 'off')),
+    'mouse_direct_sensitivity': ('direct_sensitivity', (0.0, 10.0)),
+    'mouse_camera_sensitivity': ('camera_sensitivity', (0.05, 20.0)),
+    'mouse_camera_scale': ('camera_scale', (0.05, 20.0)),
+    'mouse_camera_invert_x': ('invert_x', bool),
+    'mouse_camera_invert_y': ('invert_y', bool),
+    'mouse_hold_auto_rotation': ('hold_auto_rotation', bool),
+    'mouse_look_feel': ('look_feel', ('linear', 'legacy')),
+    'mouse_look_gain': ('look_gain', (0.01, 20.0)),
+}
 
 
 def _parse_mouse_line(output, value, settings):
     """Shared by the commented and uncommented cases below: mouse_to_joystick and
     mouse_movement_params, whichever `output`/`value` this particular line parsed to."""
+    if output in MOUSE_EXTRA_KEYS:
+        field, kind = MOUSE_EXTRA_KEYS[output]
+        if kind is bool:
+            if value.lower() not in ('0', '1', 'off', 'on', 'false', 'true'):
+                return False
+            parsed = value.lower() in ('1', 'on', 'true')
+        elif isinstance(kind[0], str):
+            parsed = value.lower()
+            if parsed not in kind:
+                return False
+        else:
+            try:
+                parsed = float(value)
+            except ValueError:
+                return False
+            if not math.isfinite(parsed) or not kind[0] <= parsed <= kind[1]:
+                return False
+        settings[field] = parsed
+        return True
     if output == 'mouse_to_joystick' and value in ('left', 'right'):
         settings['enabled'] = True
         settings['stick'] = value
@@ -489,13 +529,18 @@ def load_input_ini(path):
     just whether the mouse is live right now -- uncommenting it is exactly what the "Enable
     mouse look" checkbox does in save_input_ini.
     """
-    bindings = {key: [] for key in KEYBOARD_OUTPUTS}
     try:
         lines = Path(path).read_text(encoding='utf-8').splitlines()
     except FileNotFoundError:
         lines = DEFAULT_INPUT_INI.splitlines()
     except OSError:
         lines = []
+    return parse_input_lines(lines)
+
+
+def parse_input_lines(lines):
+    """Read in-memory edits with the same parser as a saved input.ini."""
+    bindings = {key: [] for key in KEYBOARD_OUTPUTS}
     toggle_key, reload_key = 'f7', 'f8'
     mouse = dict(MOUSE_SETTINGS_DEFAULTS)
     for raw in lines:
@@ -522,7 +567,48 @@ def load_input_ini(path):
             pass
         elif output in bindings and is_bindable(output, value):
             bindings[output].append(format_binding(value))
+    if mouse['camera_mode'] == 'off':
+        mouse['enabled'] = False
+        mouse['camera_mode'] = 'direct'
     return bindings, lines, toggle_key, reload_key, mouse
+
+
+# bbhost's PC defaults, adapted to bbport's output names. Applied only by the explicit preset
+# button; updates never replace a player's existing bindings. Menu confirm/back are scoped to
+# game menus by the runtime. The walking modifier and physical pad can coexist.
+BBHOST_BINDINGS = {
+    'cross': ('e',), 'circle': ('space',), 'square': ('f',), 'triangle': ('r',),
+    'l1': ('c', 'middlebutton'), 'r1': ('leftbutton',), 'l2': ('x', 'rightbutton'),
+    'r2': ('v',), 'l3': ('lctrl',), 'r3': ('q',), 'strong': ('lshift',),
+    'leftjoystick_halfmode': ('lalt',), 'options': ('escape',),
+    'pad_up': ('up',), 'pad_down': ('down',), 'pad_left': ('left',), 'pad_right': ('right',),
+    'touchpad_left': ('g',), 'touchpad_right': ('t',),
+    'axis_left_x_minus': ('a',), 'axis_left_x_plus': ('d',),
+    'axis_left_y_minus': ('w',), 'axis_left_y_plus': ('s',),
+    'axis_right_x_minus': ('j',), 'axis_right_x_plus': ('l',),
+    'axis_right_y_minus': ('i',), 'axis_right_y_plus': ('k',),
+    'menu_confirm': ('enter',), 'menu_back': ('backspace',),
+}
+
+
+def bbhost_preset_lines(lines):
+    """Replace PC bindings explicitly; retain controller mappings, comments and other settings.
+
+    Every old PC slot is replaced, including secondaries: leaving bbport's default secondary
+    C-to-lock-on binding would also lock on when the new C-to-transform binding is pressed.
+    """
+    result = []
+    for raw in lines:
+        body = ''.join(raw.split()).split('#', 1)[0]
+        if '=' in body:
+            output, value = (p.split(':')[0] for p in body.split('=', 1))
+            if output in BBHOST_BINDINGS and value in BINDABLE_NAMES_SET:
+                continue
+        result.append(raw)
+    result.append('# bbhost PC bindings')
+    for output, values in BBHOST_BINDINGS.items():
+        result.extend(f'{output} = {value}' for value in values)
+    return result
 
 
 def reserved_keys(toggle_key, reload_key):
@@ -578,44 +664,43 @@ def save_mouse_settings(path, settings, lines):
     the default file ships it) and mouse_movement_params in place; appends either line if the
     file never had it (an input.ini from before this feature, or one copied from shadPS4, which
     uses the same key names but never had mouse_to_joystick to begin with)."""
-    written_toggle = written_params = False
-    written_simple = set()
+    settings = {**MOUSE_SETTINGS_DEFAULTS, **settings}
+    updates = {'mouse_movement_params': '{:.3g}, {:.3g}, {:.3g}'.format(
+        settings['deadzone_offset'], settings['speed'], settings['speed_offset'])}
+    for output, (field, kind) in MOUSE_EXTRA_KEYS.items():
+        value = settings[field]
+        updates[output] = ('1' if value else '0') if kind is bool else \
+            str(value) if isinstance(kind[0], str) else f'{float(value):.3g}'
+    written_toggle = False
+    written = set()
     out = []
     for raw in lines:
         line = ''.join(raw.split())
         hash_pos = line.find('#')
         body = line[:hash_pos] if hash_pos >= 0 else line
         commented_body = line[hash_pos + 1:] if hash_pos >= 0 else ''
-        is_toggle_line = ('mouse_to_joystick' in body.split('=', 1)[0] if '=' in body else False) or \
-            ('mouse_to_joystick' in commented_body.split('=', 1)[0] if '=' in commented_body else False)
-        is_params_line = '=' in body and body.split('=', 1)[0].split(':')[0] == 'mouse_movement_params'
-        if is_toggle_line and not written_toggle:
+        is_toggle_line = (body.split('=', 1)[0] == 'mouse_to_joystick' if '=' in body else False) or \
+            (commented_body.split('=', 1)[0] == 'mouse_to_joystick' if '=' in commented_body else False)
+        if is_toggle_line:
+            if written_toggle:
+                continue
             written_toggle = True
             new_line = f"mouse_to_joystick = {settings['stick']}"
             out.append(new_line if settings['enabled'] else f'# {new_line}')
             continue
-        simple = next((key for key, name in MOUSE_SIMPLE_LINES.items()
-                       if '=' in body and body.split('=', 1)[0].split(':')[0] == name), None)
-        if simple:
-            if simple not in written_simple:
-                written_simple.add(simple)
-                out.append(_mouse_simple_line(simple, settings[simple]))
-            continue
-        if is_params_line and not written_params:
-            written_params = True
-            out.append('mouse_movement_params = {:.3g}, {:.3g}, {:.3g}'.format(
-                settings['deadzone_offset'], settings['speed'], settings['speed_offset']))
+        output = body.split('=', 1)[0].split(':')[0] if '=' in body else ''
+        if output in updates:
+            if output not in written:
+                out.append(f'{output} = {updates[output]}')
+                written.add(output)
             continue
         out.append(raw)
     if not written_toggle:
         new_line = f"mouse_to_joystick = {settings['stick']}"
         out.append(new_line if settings['enabled'] else f'# {new_line}')
-    if not written_params:
-        out.append('mouse_movement_params = {:.3g}, {:.3g}, {:.3g}'.format(
-            settings['deadzone_offset'], settings['speed'], settings['speed_offset']))
-    for key in MOUSE_SIMPLE_LINES:
-        if key not in written_simple and settings[key] != MOUSE_SETTINGS_DEFAULTS[key]:
-            out.append(_mouse_simple_line(key, settings[key]))
+    for output, value in updates.items():
+        if output not in written:
+            out.append(f'{output} = {value}')
     Path(path).write_text('\n'.join(out) + '\n', encoding='utf-8')
 
 

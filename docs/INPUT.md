@@ -34,6 +34,15 @@ are then clamped and passed through the deadzone), matching shadPS4.
 `l2`/`r2` also carry an analog value: a trigger bound to them passes its own reading; a key or
 button snaps it to the maximum, same as the previous fixed layout.
 
+Three more lines take one input each instead of being outputs. They are how the port's own PC
+conveniences are bound, and the launcher's `Apply bbhost bindings` preset fills them in:
+
+| Line | What it does |
+|---|---|
+| `strong` | While held, a light attack (`r1`) is delivered as a strong one (`r2`); in a game menu it does nothing, so a light attack stays a light attack there |
+| `menu_confirm` | While a game menu is open, presses the game's own decide button (Cross, or Circle on the Japanese button convention) |
+| `menu_back` | While a game menu is open, presses the game's own return button (the other of the two) |
+
 ## Inputs
 
 - **Keyboard:** letters/digits (`a`..`z`, `0`..`9`), `f1`..`f12`, `space`, `enter`, `tab`,
@@ -131,6 +140,10 @@ small texture the game uploads and saves its bytes, to find button pictures in o
 
 ## Mouse look
 
+Mouse look uses the direct camera below by default. The following describes the optional
+legacy stick-emulation mode; set `mouse_camera = stick` and `mouse_look_feel = legacy`
+to use it. `mouse_look_feel = linear` is the default stick fallback.
+
 ```ini
 mouse_to_joystick = right            # left | right; absent = mouse look does not exist
 mouse_movement_params = 0.5, 1, 0.125   # deadzone_offset (unused, see below), speed, speed_offset
@@ -166,33 +179,30 @@ to the stick the mouse drives while locked on. The launcher's Controls page sets
 ## Direct mouse camera (1:1, game 1.09)
 
 ```ini
-mouse_camera = direct            # direct | stick (default: stick)
-mouse_camera_sensitivity = 1.0   # 1.0 = 900 mouse counts per radian; higher turns faster
-mouse_camera_sync = on           # on (default) | off: turn the drawn camera position too
+mouse_camera = direct            # direct (default) | stick | off
+mouse_direct_sensitivity = 5     # 0..10: 5 is 0.25 degrees a mouse count
+mouse_camera_sensitivity = 1.0   # a multiplier on top of it
 mouse_to_joystick = right        # still required: mouse look on/off (F7), and the lock-on stick
 ```
 
-With `mouse_camera = direct`, mouse motion writes the game's camera yaw/pitch itself instead of
-emulating a stick, like a native PC game: no stick deadzone, no acceleration curve, no turn-speed
-cap. It hooks the game's camera update (`gpu/shim/bloodborne_cam.cpp`: the Bloodborne mouse
-camera by imedved on Nexus Mods, ported to this port by mcrib884 in #3) and samples the mouse at
-1 kHz on its own thread. The launcher's Controls page sets the mode and this sensitivity under
-*Mouse look* (the stick sensitivity there applies to stick emulation only).
-
-The game draws the camera from a position that follows its ideal one around the character with a
-spring, so turning the angles alone eases a turn in over about 100 ms. With `mouse_camera_sync =
-on`, the drawn position is turned by the same angles, and the turn is drawn whole in the next
-frame (the approach of Ryan Sousa's keyboard and mouse fork). Set it to `off` and press F8 to
-compare.
+**The direct camera is the default**: with mouse look on and no `mouse_camera` line at all, mouse
+motion writes the game's camera yaw and pitch itself instead of emulating a stick, like a native
+PC game: no stick deadzone, no acceleration curve, no turn-speed cap, and no frame-time term, so
+the same movement turns the camera the same amount whatever the frame rate is. `mouse_camera =
+stick` (or `legacy`) restores the stick emulation above; `off` leaves the camera to the pad.
 
 - **Lock-on:** while a target is locked, motion goes to the stick instead (the game drives the
-  camera then), so a flick still switches targets.
-- **Monocular:** aiming through the Monocular follows the mouse too.
-- **F7** turns mouse look off and removes the hook, so the right stick/arrow keys drive the
-  camera again. While the direct camera is on, the stick does not turn the camera.
-- **Fallback:** if the camera code is not found (another game version), the port logs
-  `Mouse camera: ... using the stick mode` once and the stick emulation above is used instead.
-- Latency is lowest with a locked frame rate (60 FPS works well).
+  camera then), so a fast flick switches targets instead of turning the camera.
+- **F7** turns mouse look off, so the right stick/arrow keys drive the camera again. While the
+  direct camera is on, the stick does not turn the camera.
+- **Fallback:** on any other game version, or if another patch has changed the code the port
+  hooks, it logs one line and the stick emulation above is used instead.
+
+The camera is not the only thing the mouse drives: the game's own menus take the pointer (click
+to select, right click to go back, the wheel to scroll) while a menu is open, with `menu_confirm`
+and `menu_back` as the menu's decide and return keys. The settings, the hooks they are placed
+behind, and the launcher's Controls page are described in
+[direct-input.md](direct-input.md).
 
 ## Keyboard movement: opposite keys and quick direction changes
 

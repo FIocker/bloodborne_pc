@@ -73,7 +73,7 @@ int bbgpu_input_reload_requested(void);
  * invert, the vertical sensitivity) and whether the drawn position turns too (mouse_camera_sync).
  * Safe from any thread; applied on the window thread's next
  * PollEvents. */
-void bbgpu_mouse_camera_configure(int direct, float sensitivity, float scale_x, float scale_y, int sync);
+void bbgpu_mouse_camera_configure(int direct, float sensitivity);
 /* NVIDIA Reflex: called before pad input sampling (driver frame pacing). */
 void bbgpu_reflex_pre_input_sample(void);
 /* NVIDIA Reflex: called immediately after pad input has been sampled. */

@@ -15,6 +15,8 @@
 #include "runtime.h"
 #include "gpu/bbgpu.h"
 #include "runtime_input_config.h"
+#include "runtime_mouse_camera.h"
+#include "menu_pointer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -506,13 +508,12 @@ static void ensure_config_loaded(void) {
         free(fresh);
         puts("Input config: using built-in defaults");
     }
-    bbgpu_input_configure(loaded_config ? loaded_config->mouse.stick!=0 : 0,
+    bbgpu_input_configure(loaded_config ? loaded_config->mouse.stick!=0 && loaded_config->mouse.camera!=MOUSE_CAMERA_OFF : 0,
                           loaded_config ? loaded_config->toggle_scancode : default_config.toggle_scancode,
                           loaded_config ? loaded_config->reload_scancode : default_config.reload_scancode);
-    const MouseParams *mouse=loaded_config ? &loaded_config->mouse : &default_config.mouse;
     configure_prompts(loaded_config ? loaded_config : &default_config);
-    bbgpu_mouse_camera_configure(loaded_config ? mouse->camera_direct : 0,mouse->camera_sensitivity,
-                                 input_mouse_scale_x(mouse),input_mouse_scale_y(mouse),mouse->camera_sync);
+    bbgpu_mouse_camera_configure(loaded_config ? loaded_config->mouse.camera==MOUSE_CAMERA_DIRECT && loaded_config->mouse.stick==2 : 0,
+                                 loaded_config ? loaded_config->mouse.camera_sensitivity : 1.0f);
 }
 /* CFG-008: called once per sample() (under `lock`), reloads if the window thread set the F8
  * flag. The read of the new file (input_config_load, I/O) happens before the critical section
@@ -530,11 +531,9 @@ static void reload_config_if_requested(void) {
         free(old);
         if (fresh->warnings) printf("Input config: %s reloaded, %u line(s) ignored (see above)\n",path,fresh->warnings);
         else printf("Input config: %s reloaded\n",path);
-        bbgpu_input_configure(loaded_config->mouse.stick!=0,loaded_config->toggle_scancode,loaded_config->reload_scancode);
-        const MouseParams *mouse=&loaded_config->mouse;
         configure_prompts(loaded_config);
-        bbgpu_mouse_camera_configure(mouse->camera_direct,mouse->camera_sensitivity,
-                                     input_mouse_scale_x(mouse),input_mouse_scale_y(mouse),mouse->camera_sync);
+        bbgpu_input_configure(loaded_config->mouse.stick!=0 && loaded_config->mouse.camera!=MOUSE_CAMERA_OFF,loaded_config->toggle_scancode,loaded_config->reload_scancode);
+        bbgpu_mouse_camera_configure(loaded_config->mouse.camera==MOUSE_CAMERA_DIRECT && loaded_config->mouse.stick==2,loaded_config->mouse.camera_sensitivity);
     } else {
         free(fresh);
     }
@@ -575,7 +574,7 @@ static void sample_host(PadData *d) {
         InputOutput out=plain_buttons[i];
         if (button_output_held(&host,cfg,out)) d->buttons|=button_bit(out);
     }
-    /* OUT-003/OUT-004: l2/r2 carry both a button bit and an analog value. A gatilho físico
+    /* OUT-003/OUT-004: l2/r2 carry both a button bit and an analog value. A gatilho fÃ­sico
      * passes its own reading; a plain button/key bound to l2/r2 snaps the analog to 255,
      * matching the pre-existing keyboard behavior (KBD-006). */
     for (int i=0;i<cfg->table.binding_count[OUT_L2];++i) {
@@ -618,28 +617,40 @@ static void sample_host(PadData *d) {
     rx=apply_deadzone(rx,cfg->deadzone[DEADZONE_RIGHT_STICK].inner,cfg->deadzone[DEADZONE_RIGHT_STICK].outer);
     ry=apply_deadzone(ry,cfg->deadzone[DEADZONE_RIGHT_STICK].inner,cfg->deadzone[DEADZONE_RIGHT_STICK].outer);
 
-    /* CNV-001/MOU-009: the mouse contribution is added after the stick's own deadzone, not
-     * before it -- mouse_to_axis's own output-value lerp already keeps small/slow motion from
-     * producing a jumpy or oversized contribution (see its doc comment), so running the result
-     * through apply_deadzone too would just chop off the small end of an already-smooth curve. */
-    if (mouse.captured && cfg->mouse.stick) {
-        uint64_t now=now_us();
-        double dt_ms=last_mouse_sample_us ? (double)(now-last_mouse_sample_us)/1000.0 : 33.0;
-        if (dt_ms<1.0) dt_ms=1.0;
-        if (dt_ms>100.0) dt_ms=100.0;
-        last_mouse_sample_us=now;
-        int mx=0, my=0;
-        mouse_to_axis(mouse.dx*input_mouse_scale_x(&cfg->mouse),mouse.dy*input_mouse_scale_y(&cfg->mouse),
-                      dt_ms,&cfg->mouse,&mx,&my);
+    mouse_camera_publish(cfg->mouse.direct_sensitivity, cfg->mouse.camera_sensitivity,
+                         cfg->mouse.camera_scale, cfg->mouse.invert_x, cfg->mouse.invert_y,
+                         cfg->mouse.hold_auto_rotation && !menu_pointer_using_controller());
+    int mx=0, my=0;
+    const int direct = cfg->mouse.camera==MOUSE_CAMERA_DIRECT && cfg->mouse.stick==2 && mouse_camera_installed();
+    if (mouse.captured && cfg->mouse.stick && cfg->mouse.camera!=MOUSE_CAMERA_OFF) {
+        if (direct) {
+            float fx=0, fy=0;
+            if (mouse_camera_flick(&fx,&fy)) { mx=(int)lroundf(fx*127); my=(int)lroundf(fy*127); }
+            // Direct counts are already owned by the camera, never replayed onto the stick.
+            last_mouse_sample_us=0;
+            smoothed_mouse_stick_x=smoothed_mouse_stick_y=0;
+        } else if (cfg->mouse.look_linear) {
+            mx=(int)lroundf(fmaxf(-127,fminf(127,mouse.dx*cfg->mouse.look_gain)));
+            my=(int)lroundf(fmaxf(-127,fminf(127,mouse.dy*cfg->mouse.look_gain)));
+        } else {
+            uint64_t now=now_us();
+            double dt_ms=last_mouse_sample_us ? (double)(now-last_mouse_sample_us)/1000.0 : 33.0;
+            if (dt_ms<1.0) dt_ms=1.0;
+            if (dt_ms>100.0) dt_ms=100.0;
+            last_mouse_sample_us=now;
+            mouse_to_axis(mouse.dx,mouse.dy,dt_ms,&cfg->mouse,&mx,&my);
+        }
+        if (!direct && cfg->mouse.invert_x) mx=-mx;
+        if (!direct && cfg->mouse.invert_y) my=-my;
         int *tx=cfg->mouse.stick==1 ? &lx : &rx, *ty=cfg->mouse.stick==1 ? &ly : &ry;
         *tx+=mx; *ty+=my;
         *tx=*tx<-127?-127:*tx>127?127:*tx; *ty=*ty<-127?-127:*ty>127?127:*ty;
     } else {
-        /* MOU-005/CNV-002: no stale dt or velocity-filter memory survives a capture gap -- the
-         * next capture must start the EMA fresh, not carry over speed from before the gap. */
         last_mouse_sample_us=0;
         smoothed_mouse_stick_x=smoothed_mouse_stick_y=0.0;
     }
+    mouse_camera_trace(direct ? "direct" : cfg->mouse.look_linear ? "linear" : "legacy",
+                         mouse.dx,mouse.dy,mx,my);
 
     if (button_output_held(&host,cfg,OUT_LEFTJOYSTICK_HALFMODE)) { lx/=2; ly/=2; }
     if (button_output_held(&host,cfg,OUT_RIGHTJOYSTICK_HALFMODE)) { rx/=2; ry/=2; }
@@ -670,6 +681,19 @@ static void sample_host(PadData *d) {
     if (button_output_held(&host,cfg,OUT_TOUCHPAD_LEFT)) touch_click(d,0);
     if (button_output_held(&host,cfg,OUT_TOUCHPAD_RIGHT)) touch_click(d,1);
     if (button_output_held(&host,cfg,OUT_TOUCHPAD_CENTER)) { d->buttons|=BTN_TOUCHPAD; d->touch_count=1; d->touches[0]=(PadTouch){.x=960,.y=471,.id=0}; }
+    const InputBinding strong={.kind=cfg->strong.kind,.value=cfg->strong.value};
+    if (!menu_pointer_in_menu() && binding_held(&host,&strong) && (d->buttons&BTN_R1)) {
+        d->buttons=(d->buttons&~BTN_R1)|BTN_R2; d->r2=255;
+    }
+    if (menu_pointer_in_menu()) {
+        const InputBinding confirm={.kind=cfg->menu_confirm.kind,.value=cfg->menu_confirm.value};
+        const InputBinding back={.kind=cfg->menu_back.kind,.value=cfg->menu_back.value};
+        if (binding_held(&host,&confirm)) d->buttons|=menu_confirm_button();
+        if (binding_held(&host,&back)) d->buttons|=menu_back_button();
+        d->buttons|=menu_pointer_take_press();
+    }
+    menu_pointer_pad(d->buttons,d->left_x,d->left_y);
+
 }
 
 /* BB_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated

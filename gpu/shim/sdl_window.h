@@ -40,6 +40,7 @@ public:
     s32 GetHeight() const { return height.load(std::memory_order_relaxed); }
     SDL_Window* GetSDLWindow() const { return window; }
     WindowSystemInfo GetWindowInfo() const { return window_info; }
+    bool HasInputFocus() const;
     bool IsOpen() const { return is_open.load(std::memory_order_relaxed); }
     /// Any thread: whether the window has keyboard focus (mute_unfocused).
     bool IsFocused() const { return window_focused.load(std::memory_order_relaxed); }
@@ -58,6 +59,7 @@ public:
     /// joystick mode exists at all (MOU-001) and the current toggle/reload hotkey scancodes
     /// (SDL_SCANCODE_UNKNOWN = none bound). Takes effect on the next PollEvents.
     void ConfigureInput(bool mouse_mode_available, int32_t toggle_scancode, int32_t reload_scancode);
+    void ConfigureCamera(bool direct) { direct_camera.store(direct, std::memory_order_relaxed); }
     /// Any thread: 1 once after the reload hotkey was pressed, then clears back to 0. The pad
     /// thread polls this once per sample() to know when to re-read input.ini (CFG-008).
     int TakeInputReloadRequested();
@@ -79,6 +81,7 @@ private:
     // the window thread (PollEvents and the constructor), so it needs no lock.
     std::mutex mouse_mutex;
     MouseInput mouse;
+    uint32_t mouse_pressed{}; // Retain a down/up pair until the next pad sample.
     std::atomic<bool> mouse_mode_available{false};  // MOU-001: mouse_to_joystick present in input.ini
     std::atomic<bool> mouse_mode_on{false};         // toggled by the hotkey (MOU-002); not saved
     std::atomic<bool> input_configured_once{false}; // MOU-002: turn mouse_mode_on on only on the
@@ -99,10 +102,9 @@ private:
     /// (MOU-004, MOU-005) so no stale motion or held button survives into the next capture.
     void UpdateMouseCapture();
     bool mouse_captured_last{false};
-    /// Window thread, every PollEvents: installs/removes the direct camera hook
-    /// (bloodborne_cam.h) to match input.ini and the F7 toggle, and gates the BbMouse sampler.
+    std::atomic<bool> direct_camera{false};
+    /// Window thread: gates the already installed direct camera and publishes pointer position.
     void UpdateMouseCamera();
-    bool cam_hook_failed{false}; // camera code not found: stay on the stick until F7/F8
 };
 
 } // namespace Frontend

@@ -30,7 +30,6 @@
 #include "core/memory.h"
 #include "core/signals.h"
 #include "sdl_window.h"
-#include "bloodborne_cam.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
 extern "C" {
@@ -345,7 +344,7 @@ ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 } // namespace VideoCore
 
 extern "C" int bbgpu_overlay_captures_input(void) {
-    return BbOverlay::CapturesInput() ? 1 : 0;
+    return BbOverlay::CapturesInput() || (g_window && !g_window->HasInputFocus()) ? 1 : 0;
 }
 
 extern "C" int bbgpu_audio_muted(void) {
@@ -392,8 +391,9 @@ extern "C" int bbgpu_input_reload_requested(void) {
     return g_window->TakeInputReloadRequested();
 }
 
-extern "C" void bbgpu_mouse_camera_configure(int direct, float sensitivity, float scale_x, float scale_y, int sync) {
-    Core::BloodborneCam::Instance().Configure(direct != 0, sensitivity, scale_x, scale_y, sync != 0);
+extern "C" void bbgpu_mouse_camera_configure(int direct, float sensitivity) {
+    (void)sensitivity; // Published at the actual pad sample, beside the inversion settings.
+    if (g_window) g_window->ConfigureCamera(direct != 0);
 }
 
 extern "C" void bbgpu_reflex_pre_input_sample(void) {

@@ -158,6 +158,8 @@ set(COMMON
 file(GLOB AVPLAYER CONFIGURE_DEPENDS shadps4/core/libraries/avplayer/*.cpp)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswscale libswresample)
 file(GLOB SHIM_SOURCES CONFIGURE_DEPENDS shim/*.cpp shim/*/*.cpp)
+# Direct SDL input supersedes the sampler thread and AOB camera hook.
+list(FILTER SHIM_SOURCES EXCLUDE REGEX "(bbport_mouse|bloodborne_cam)\\.cpp$")
 # Windows: a DLL cannot leave the runtime_* symbols for bb-probe.exe to resolve, so the
 # library is static there and linked into the executable.
 if (WIN32)
@@ -239,6 +241,8 @@ target_compile_definitions(bbgpu PRIVATE IMGUI_IMPL_VULKAN_NO_PROTOTYPES
 set_source_files_properties(shim/bbport_overlay.cpp PROPERTIES
     OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/fonts/DejaVuSans.ttf)
 target_include_directories(bbgpu PRIVATE shim shadps4 ${SHADER_INCLUDE} third_party/gcn/include third_party/half/include)
+target_include_directories(bbgpu PRIVATE ../src)
+target_sources(bbgpu PRIVATE ../src/menu_pointer.cpp)
 target_compile_definitions(bbgpu PRIVATE BOOST_ASIO_STANDALONE NDEBUG)
 target_compile_options(bbgpu PRIVATE -Wno-deprecated-declarations -Wno-missing-field-initializers)
 # Runtime symbols (runtime_memory_*, runtime_process_*) resolve against bb-probe.
@@ -400,3 +404,22 @@ add_executable(neural-settings-test EXCLUDE_FROM_ALL ../tests/test_neural_settin
     shim/bbport_neural_settings.cpp)
 target_include_directories(neural-settings-test PRIVATE shim)
 target_compile_options(neural-settings-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+# Direct input regression checks do not need the game, SDL windows or a Vulkan device.
+add_executable(direct-mouse-test EXCLUDE_FROM_ALL ../tests/test_direct_mouse.c
+               ../src/runtime_mouse_camera.c)
+set_target_properties(direct-mouse-test PROPERTIES C_STANDARD 11)
+target_include_directories(direct-mouse-test PRIVATE ../src)
+target_compile_options(direct-mouse-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+if (NOT WIN32)
+    target_link_libraries(direct-mouse-test PRIVATE m)
+endif()
+add_executable(menu-pointer-test EXCLUDE_FROM_ALL ../tests/test_menu_pointer.cpp
+               ../src/menu_pointer.cpp)
+target_compile_options(menu-pointer-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+if (WIN32)
+    target_compile_definitions(menu-pointer-test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    add_executable(mouse-hooks-test EXCLUDE_FROM_ALL ../tests/test_mouse_hooks.c)
+    set_target_properties(mouse-hooks-test PROPERTIES C_STANDARD 11)
+    target_compile_options(mouse-hooks-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+endif()
