@@ -51,7 +51,7 @@ ldd "$dest/bin/bb-probe.exe" "$dest/bin/bb-gpu-capabilities.exe" |
     awk '/\/clang64\/bin\// {print $3}' | sort -u | while read -r dll; do
         cp -u "$dll" "$dest/bin/"
     done
-cp -r scripts patches "$dest/"
+cp -r scripts patches benchmark "$dest/"
 # Legacy CPU (Intel 3rd generation and older): the translation plan scripts/cpu_compat.py applies.
 mkdir -p "$dest/tools" && cp tools/legacy-cpu-plan.json "$dest/tools/"
 cp run.py LICENSE README.md packaging/windows/README-Windows.txt "$dest/"

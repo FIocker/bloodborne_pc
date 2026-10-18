@@ -130,6 +130,7 @@ def run_command():
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bbport_lang  # noqa: E402
 import bbport_trophies as trophies  # noqa: E402
+import bbport_benchmark as benchmark  # noqa: E402
 from bbport_input_config import (STICK_OUTPUTS, OUTPUT_LABELS, ACTION_GROUPS, SLOTS, keysym_to_name,
                                   button_num_to_name, input_ini_path, load_input_ini, reserved_keys,
                                   save_input_ini, save_mouse_settings, wheel_to_name, MAX_COMBO,
@@ -1868,6 +1869,8 @@ class Launcher:
         holder = ttk.Frame(f)
         holder.grid(row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(10, 0))
         ttk.Button(holder, text=_('Clear shader cache', 'Очистить кэш шейдеров'), command=self.clear_cache).pack(side='left')
+        ttk.Button(holder, text=_('Run benchmark…', 'Запустить тест…'), command=self.run_benchmark).pack(
+            side='left', padx=(6, 0))
         ttk.Label(holder, text=_('If the game only shows a black screen, this usually helps.',
                                  'Если игра показывает только чёрный экран, обычно это помогает.'),
                   style='Muted.TLabel').pack(side='left', padx=10)
@@ -2480,6 +2483,74 @@ class Launcher:
             self.ui_calls.put(lambda: show(versions))
         threading.Thread(target=fetch, daemon=True).start()
 
+    def run_benchmark(self):
+        """Advanced > Run benchmark (bbport_benchmark.py): a fixed route on a fixed save with the
+        player's settings; the results zip is shown in Explorer."""
+        if self.process or getattr(self, 'benchmark_run', None):
+            return
+        self.collect()
+        if not game_info(self.app['game_dir']):
+            self.messagebox.showerror('Bloodborne', _('Choose the game folder with eboot.bin (CUSA03173).',
+                                                      'Выберите папку игры с eboot.bin (CUSA03173).'))
+            self.show('game')
+            return
+        if not self.messagebox.askokcancel('Bloodborne', _(
+                'The benchmark plays a fixed route in Cathedral Ward on its own save with your graphics '
+                'settings (offline, frame rate uncapped). It takes about 4 minutes.\n\nDo not touch the '
+                'mouse, keyboard or controller while it runs. Your own save is put aside and comes back '
+                'afterwards.\n\nThe results (a zip to send) open in Explorer at the end.',
+                'Тест проходит один и тот же маршрут в Соборном округе на своём сохранении с вашими '
+                'настройками графики (офлайн, без ограничения FPS). Займёт около 4 минут.\n\nНе трогайте '
+                'мышь, клавиатуру и геймпад во время теста. Ваше сохранение будет отложено и вернётся '
+                'после.\n\nРезультаты (zip для отправки) откроются в Проводнике.')):
+            return
+        tk, ttk = self.tk, self.ttk
+        window = tk.Toplevel(self.root)
+        window.title(_('Benchmark', 'Тест'))
+        window.configure(bg=BG)
+        window.transient(self.root)
+        window.resizable(False, False)
+        frame = ttk.Frame(window, padding=self.px(16))
+        frame.pack(fill='both', expand=True)
+        status = ttk.Label(frame, text=_('Starting…', 'Запуск…'), wraplength=self.px(380), justify='left')
+        status.pack(anchor='w')
+        user_dir = Path(self.app.get('user_dir') or DATA_DIR / 'user')
+        run = benchmark.Run(PORT_DIR, DATA_DIR, user_dir, game_environment(self.app), run_command(),
+                            progress=lambda text: self.ui_calls.put(
+                                lambda: window.winfo_exists() and status.configure(text=text)))
+        self.benchmark_run = run
+        ttk.Button(frame, text=_('Cancel', 'Отмена'), command=run.cancel).pack(anchor='w', pady=(12, 0))
+        window.protocol('WM_DELETE_WINDOW', run.cancel)
+        self.play_button.configure(state='disabled')
+
+        def done(archive, error):
+            self.benchmark_run = None
+            self.play_button.configure(state='normal')
+            if window.winfo_exists():
+                window.destroy()
+            if archive:
+                subprocess.Popen(['explorer', '/select,', str(archive)])
+                summary = archive.with_suffix('') / 'summary.txt'
+                text = summary.read_text(encoding='utf-8') if summary.is_file() else ''
+                self.messagebox.showinfo('Bloodborne', _('Benchmark finished. Send this file: {}',
+                                                         'Тест завершён. Отправьте этот файл: {}').format(
+                    archive.name) + '\n\n' + text.split('Results', 1)[-1][:900])
+            elif error:
+                self.messagebox.showerror('Bloodborne', _('The benchmark stopped: {}',
+                                                          'Тест остановлен: {}').format(error))
+
+        def work():
+            archive = error = None
+            try:
+                archive = run.run()
+            except benchmark.Cancelled:
+                pass
+            except Exception as failure:  # shown to the player; the save is restored either way
+                error = failure
+            self.ui_calls.put(lambda: done(archive, error))
+
+        threading.Thread(target=work, daemon=True).start()
+
     def clear_cache(self):
         """Shader and pipeline caches; they are rebuilt while playing."""
         if self.process:
@@ -2611,6 +2682,22 @@ def play_without_window(settings):
         return process.wait()
 
 
+def benchmark_without_window(settings):
+    """--benchmark: Advanced > Run benchmark without the window; prints the progress and the zip."""
+    attach_stdio()
+    user_dir = Path(settings.get('user_dir') or DATA_DIR / 'user')
+    run = benchmark.Run(PORT_DIR, DATA_DIR, user_dir, game_environment(settings), run_command(),
+                        progress=lambda text: print(text, flush=True))
+    try:
+        archive = run.run()
+    except Exception as error:
+        print(f'Benchmark stopped: {error}', flush=True)
+        return 1
+    print(f'Results: {archive}', flush=True)
+    print((archive.with_suffix('') / 'summary.txt').read_text(encoding='utf-8'), flush=True)
+    return 0
+
+
 def version_tuple(text):
     return tuple(int(number) for number in re.findall(r'\d+', text or ''))
 
@@ -2685,6 +2772,13 @@ def main():
     LANG = settings.get('ui_language') or windows_language()
     if args[:1] == ['--install-update'] and len(args) == 3:
         sys.exit(install_update(args[1], args[2]))
+    # A benchmark that did not finish (closed launcher, crash) left its save in place of the player's.
+    try:
+        benchmark.restore_save(Path(settings.get('user_dir') or DATA_DIR / 'user'))
+    except OSError:
+        pass
+    if args[:1] == ['--benchmark']:
+        sys.exit(benchmark_without_window(settings))
     if FROZEN and UPDATE_DIR not in PORT_DIR.parents:
         shutil.rmtree(UPDATE_DIR, ignore_errors=True)  # what a finished update left behind
     # Without a usable game folder there is nothing to play yet: open the launcher instead.
