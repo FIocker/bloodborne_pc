@@ -147,6 +147,11 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
     } else {
         Vulkan::SetObjectName(device, Handle(), "Buffer {:#x}:{:#x}", cpu_addr, size_bytes);
     }
+    // bbport: the name in the allocator's statistics (BB_VMA_DUMP), for VRAM by purpose.
+    if (buffer.allocation) {
+        const std::string name{debug_name.empty() ? std::string_view{"Buffer"} : debug_name};
+        vmaSetAllocationName(instance.GetAllocator(), buffer.allocation, name.c_str());
+    }
 
     if (mem_type != MemoryType::Sparse) {
         VkMemoryPropertyFlags property_flags{};

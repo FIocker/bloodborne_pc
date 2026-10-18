@@ -98,7 +98,17 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     // VRAM types only): on 4 GB cards textures filled VRAM and the next area stopped the game
     // with ErrorOutOfDeviceMemory. Textures keep their own placement (a reserve made by moving
     // them to system memory cost FPS after every area load in 1.9).
-    if (!instance.IsIntegrated()) {
+    // bbport: only where the arena has no memory type outside VRAM. AMD and Intel accept system
+    // memory for it (EnsureResident falls back to that first): there the reserve held ~480 MiB
+    // of a 4 GB card for good and was never used (RX 6500 XT: "reserve 0 of 478 MiB used").
+    const auto& arena_props = instance.GetMemoryProperties();
+    const u32 arena_heap = arena_props.memoryTypes[arena_memory_type_index].heapIndex;
+    bool system_fallback = false;
+    for (u32 i = 0; i < arena_props.memoryTypeCount; ++i) {
+        system_fallback |= ((arena_memory_type_bits >> i) & 1) != 0 &&
+                           arena_props.memoryTypes[i].heapIndex != arena_heap;
+    }
+    if (!instance.IsIntegrated() && !system_fallback) {
         const auto& props = instance.GetMemoryProperties();
         const u64 heap = props.memoryHeaps[props.memoryTypes[arena_memory_type_index].heapIndex].size;
         const u64 size = Common::AlignDown(std::min<u64>(512_MB, heap / 8), block_size);
