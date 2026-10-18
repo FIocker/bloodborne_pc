@@ -9,7 +9,6 @@
 #include "shader_recompiler/ir/microinstruction.h"
 #include "shader_recompiler/runtime_info.h"
 
-#include <cstddef>
 #include <boost/container/static_vector.hpp>
 #include <fmt/format.h>
 #include <spirv/unified1/spirv.hpp11>
@@ -153,8 +152,7 @@ void EmitContext::DefineArithmeticTypes() {
     u16_zero_value = Constant(U16, 0U);
     u32_one_value = ConstU32(1U);
     u32_zero_value = ConstU32(0U);
-    f32_one_value = ConstF32(1.f);
-    f32_zero_value = ConstF32(0.f);
+    f32_zero_value = ConstF32(0.0f);
     u64_one_value = Constant(U64, 1ULL);
     u64_zero_value = Constant(U64, 0ULL);
 
@@ -314,9 +312,7 @@ void EmitContext::DefineInputs() {
     if (info.uses_lane_id) {
         subgroup_local_invocation_id = DefineVariable(
             U32[1], spv::BuiltIn::SubgroupLocalInvocationId, spv::StorageClass::Input);
-        if (sw_stage != SwStage::Vertex) {
-            Decorate(subgroup_local_invocation_id, spv::Decoration::Flat);
-        }
+        Decorate(subgroup_local_invocation_id, spv::Decoration::Flat);
     }
     if (info.loads.GetAny(IR::Attribute::SubgroupLtMask)) {
         subgroup_lt_mask =
@@ -336,22 +332,21 @@ void EmitContext::DefineInputs() {
                 DefineVariable(U32[1], spv::BuiltIn::BaseInstance, spv::StorageClass::Input);
         }
 
-        Shader::Gcn::FetchShaderData fetch_shader;
-        if (!Gcn::ParseFetchShader(info, fetch_shader)) {
+        const auto fetch_shader = Gcn::ParseFetchShader(info);
+        if (!fetch_shader) {
             break;
         }
-        ASSERT(fetch_shader.attributes.size() <= IR::NumParams);
-        for (u32 semantic = 0; semantic < fetch_shader.attributes.size(); ++semantic) {
-            const auto& attrib = fetch_shader.attributes[semantic];
+        for (const auto& attrib : fetch_shader->attributes) {
+            ASSERT(attrib.semantic < IR::NumParams);
             const auto sharp = attrib.GetSharp(info);
             const Id type{GetAttributeType(*this, sharp.GetNumberFmt())[4]};
-            Id id{DefineInput(type, semantic)};
+            Id id{DefineInput(type, attrib.semantic)};
             if (attrib.GetStepRate() != Gcn::VertexAttribute::InstanceIdType::None) {
-                Name(id, fmt::format("vs_instance_attr{}", semantic));
+                Name(id, fmt::format("vs_instance_attr{}", attrib.semantic));
             } else {
-                Name(id, fmt::format("vs_in_attr{}", semantic));
+                Name(id, fmt::format("vs_in_attr{}", attrib.semantic));
             }
-            input_params[semantic] = GetAttributeInfo(sharp.GetNumberFmt(), id, 4, false);
+            input_params[attrib.semantic] = GetAttributeInfo(sharp.GetNumberFmt(), id, 4, false);
         }
         break;
     }
@@ -412,11 +407,9 @@ void EmitContext::DefineInputs() {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_smooth_sample = DefineVariable(
                     F32[2], spv::BuiltIn::BaryCoordSmoothSampleAMD, spv::StorageClass::Input);
-            } else if (profile.supports_fragment_shader_barycentric) {
-                if (!ValidId(bary_coord)) {
-                    bary_coord = DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR,
-                                                spv::StorageClass::Input);
-                }
+            } else if (profile.supports_fragment_shader_barycentric && !ValidId(bary_coord)) {
+                bary_coord =
+                    DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
                 // we would need sample_index to interpolate the bary_coord later
                 if (!ValidId(sample_index)) {
                     sample_index =
@@ -781,14 +774,18 @@ void EmitContext::DefineOutputs() {
 
 void EmitContext::DefinePushDataBlock() {
     // Create push constants block for instance steps rates
-    // bbport: two more members after upstream's, the object motion parameter and the scene size
-    const Id struct_type{Name(
-        TypeStruct(F32[1], F32[1], F32[1], F32[1], U32[4], U32[4], U32[2], U32[1], U32[1]), "AuxData")};
+    const Id struct_type{Name(TypeStruct(F32[1], F32[1], F32[1], F32[1], U32[4], U32[4], U32[4],
+                                         U32[4], U32[4], U32[4], U32[2], U32[1], U32[1]),
+                              "AuxData")};
     Decorate(struct_type, spv::Decoration::Block);
     MemberName(struct_type, PushData::XOffsetIndex, "xoffset");
     MemberName(struct_type, PushData::YOffsetIndex, "yoffset");
     MemberName(struct_type, PushData::XScaleIndex, "xscale");
     MemberName(struct_type, PushData::YScaleIndex, "yscale");
+    MemberName(struct_type, PushData::UdRegsIndex + 0, "ud_regs0");
+    MemberName(struct_type, PushData::UdRegsIndex + 1, "ud_regs1");
+    MemberName(struct_type, PushData::UdRegsIndex + 2, "ud_regs2");
+    MemberName(struct_type, PushData::UdRegsIndex + 3, "ud_regs3");
     MemberName(struct_type, PushData::BufOffsetIndex + 0, "buf_offsets0");
     MemberName(struct_type, PushData::BufOffsetIndex + 1, "buf_offsets1");
     MemberName(struct_type, PushData::BufOffsetIndex + 2, "buf_offsets2");
@@ -796,16 +793,17 @@ void EmitContext::DefinePushDataBlock() {
     MemberDecorate(struct_type, PushData::YOffsetIndex, spv::Decoration::Offset, 4U);
     MemberDecorate(struct_type, PushData::XScaleIndex, spv::Decoration::Offset, 8U);
     MemberDecorate(struct_type, PushData::YScaleIndex, spv::Decoration::Offset, 12U);
-    MemberDecorate(struct_type, PushData::BufOffsetIndex + 0, spv::Decoration::Offset, 16U);
-    MemberDecorate(struct_type, PushData::BufOffsetIndex + 1, spv::Decoration::Offset, 32U);
-    MemberDecorate(struct_type, PushData::BufOffsetIndex + 2, spv::Decoration::Offset, 48U);
-    // bbport: at the C++ struct's offsets, so the host can push PushData as it is
+    MemberDecorate(struct_type, PushData::UdRegsIndex + 0, spv::Decoration::Offset, 16U);
+    MemberDecorate(struct_type, PushData::UdRegsIndex + 1, spv::Decoration::Offset, 32U);
+    MemberDecorate(struct_type, PushData::UdRegsIndex + 2, spv::Decoration::Offset, 48U);
+    MemberDecorate(struct_type, PushData::UdRegsIndex + 3, spv::Decoration::Offset, 64U);
+    MemberDecorate(struct_type, PushData::BufOffsetIndex + 0, spv::Decoration::Offset, 80U);
+    MemberDecorate(struct_type, PushData::BufOffsetIndex + 1, spv::Decoration::Offset, 96U);
+    MemberDecorate(struct_type, PushData::BufOffsetIndex + 2, spv::Decoration::Offset, 112U);
     MemberName(struct_type, PushData::MotionParamIndex, "motion_param");
-    MemberDecorate(struct_type, PushData::MotionParamIndex, spv::Decoration::Offset,
-                   static_cast<u32>(offsetof(PushData, motion_param)));
+    MemberDecorate(struct_type, PushData::MotionParamIndex, spv::Decoration::Offset, 120U);
     MemberName(struct_type, PushData::SceneSizeIndex, "scene_size");
-    MemberDecorate(struct_type, PushData::SceneSizeIndex, spv::Decoration::Offset,
-                   static_cast<u32>(offsetof(PushData, scene_size)));
+    MemberDecorate(struct_type, PushData::SceneSizeIndex, spv::Decoration::Offset, 124U);
     push_data_block = DefineVar(struct_type, spv::StorageClass::PushConstant);
     Name(push_data_block, "push_data");
     interfaces.push_back(push_data_block);
@@ -993,11 +991,12 @@ Id ImageType(EmitContext& ctx, const ImageResource& desc, Id sampled_type) {
     const u32 sampled = desc.is_written ? 2 : 1;
     switch (type) {
     case AmdGpu::ImageType::Color1D:
+        return ctx.TypeImage(sampled_type, spv::Dim::Dim1D, false, false, false, sampled, format);
+    case AmdGpu::ImageType::Color1DArray:
+        return ctx.TypeImage(sampled_type, spv::Dim::Dim1D, false, true, false, sampled, format);
     case AmdGpu::ImageType::Color2D:
         return ctx.TypeImage(sampled_type, spv::Dim::Dim2D, false, false, false, sampled, format);
-    case AmdGpu::ImageType::Color1DArray:
     case AmdGpu::ImageType::Color2DArray:
-    case AmdGpu::ImageType::Cube:
         return ctx.TypeImage(sampled_type, spv::Dim::Dim2D, false, true, false, sampled, format);
     case AmdGpu::ImageType::Color2DMsaa:
         return ctx.TypeImage(sampled_type, spv::Dim::Dim2D, false, false, true, sampled, format);

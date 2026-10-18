@@ -57,17 +57,17 @@ StagingBufferPool::StagingBufferPool(const Instance& instance_, Scheduler& sched
 
 StagingBufferPool::~StagingBufferPool() = default;
 
-StagingBufferRef StagingBufferPool::Request(u64 size, MemoryType type, u64 alignment, bool deferred,
-                                            bool unsynchronized) {
+StagingBufferRef StagingBufferPool::Request(u64 size, MemoryType type, u64 alignment,
+                                            bool deferred) {
     Ring& ring = rings[u32(type)];
     if (deferred || size > BLOCK_SIZE) {
-        return RequestLarge(size, type, deferred, unsynchronized);
+        return RequestLarge(size, type, deferred);
     }
-    return RequestFromRing(ring, size, alignment, type, unsynchronized);
+    return RequestFromRing(ring, size, alignment, type);
 }
 
 StagingBufferRef StagingBufferPool::RequestFromRing(Ring& ring, u64 size, u64 alignment,
-                                                    MemoryType type, bool unsynchronized) {
+                                                    MemoryType type) {
     Block* best{};
     u64 best_offset{};
     for (size_t i = 0; i < ring.blocks.size(); ++i) {
@@ -82,18 +82,13 @@ StagingBufferRef StagingBufferPool::RequestFromRing(Ring& ring, u64 size, u64 al
     }
 
     if (!best) {
-        if (!ring.blocks.empty() && unsynchronized) {
-            best = &ring.blocks[(ring.current + 1) % ring.blocks.size()];
-            best_offset = 0;
-        } else {
-            best = &ring.blocks.emplace_back(Block{
-                .buffer = std::make_unique<VideoCore::StreamBuffer>(instance, scheduler, type,
-                                                                    BLOCK_SIZE),
-                .last_used_frame = frame,
-            });
-            ring.current = ring.blocks.size() - 1;
-            best_offset = *best->buffer->Reserve(size, alignment, false);
-        }
+        best = &ring.blocks.emplace_back(Block{
+            .buffer =
+                std::make_unique<VideoCore::StreamBuffer>(instance, scheduler, type, BLOCK_SIZE),
+            .last_used_frame = frame,
+        });
+        ring.current = ring.blocks.size() - 1;
+        best_offset = *best->buffer->Reserve(size, alignment, false);
     }
 
     auto& buffer = *best->buffer;
@@ -111,8 +106,7 @@ StagingBufferRef StagingBufferPool::RequestFromRing(Ring& ring, u64 size, u64 al
     return ref;
 }
 
-StagingBufferRef StagingBufferPool::RequestLarge(u64 size, MemoryType type, bool deferred,
-                                                 bool unsynchronized) {
+StagingBufferRef StagingBufferPool::RequestLarge(u64 size, MemoryType type, bool deferred) {
     auto& cache = large_caches[u32(type)];
     const u64 max_size = std::max(size + size / 4, RoundAllocationSize(size));
 
@@ -120,7 +114,7 @@ StagingBufferRef StagingBufferPool::RequestLarge(u64 size, MemoryType type, bool
     for (LargeBuffer& entry : cache) {
         const u64 entry_size = entry.buffer->SizeBytes();
         if (entry.held || entry_size < size || entry_size > max_size ||
-            (!scheduler.IsFree(entry.tick) && !unsynchronized)) {
+            !scheduler.IsFree(entry.tick)) {
             continue;
         }
         if (!best || entry_size < best->buffer->SizeBytes()) {

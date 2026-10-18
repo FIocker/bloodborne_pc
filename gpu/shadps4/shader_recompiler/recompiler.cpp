@@ -96,7 +96,6 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
     }
     Shader::Optimization::SsaRewritePass(program);
     Shader::Optimization::ConstantPropagationPass(program.post_order_blocks);
-    Shader::Optimization::ReadLaneEliminationPass(program);
     if (info.sw_stage == SwStage::TessellationControl) {
         Shader::Optimization::TessellationPreprocess(program, runtime_info);
         Shader::Optimization::HullShaderTransform(program, runtime_info);
@@ -105,6 +104,7 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
         Shader::Optimization::DomainShaderTransform(program, runtime_info);
     }
     Shader::Optimization::RingAccessElimination(program, runtime_info);
+    Shader::Optimization::ReadLaneEliminationPass(program);
     Shader::IR::DumpProgram(program, info, "pre-res-discover.");
     auto resources = Shader::Optimization::ResourceDiscoverPass(program, profile);
     Shader::Optimization::FlattenExtendedUserdataPass(program);
@@ -116,6 +116,7 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
     Shader::Optimization::LowerUserClipPlanes(program, runtime_info);
     Shader::Optimization::PhiSimplificationPass(program);
     Shader::Optimization::InverseBallotEliminationPass(program);
+    Shader::Optimization::LowerHardwareIntrinsics(program);
     Shader::IR::DumpProgram(program, info, "pre-lower-phi.");
 
     // Prepare for structurization by clearing flow graph and lowering phis
@@ -137,7 +138,6 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
     Shader::Optimization::SharedMemoryBarrierPass(program, runtime_info, profile);
     Shader::Optimization::DeadCodeEliminationPass(program);
     Shader::Optimization::LowerWave64BallotPass(program, runtime_info, profile);
-    Shader::Optimization::LowerHardwareIntrinsics(program);
     Shader::Optimization::ConstantPropagationPass(program.post_order_blocks);
     Shader::Optimization::DeadCodeEliminationPass(program);
     if (info.sw_stage == SwStage::Fragment && profile.needs_integer_interpolation_fix) {

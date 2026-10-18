@@ -47,6 +47,7 @@ struct ImageSpecialization {
     AmdGpu::ImageType type = AmdGpu::ImageType::Color2D;
     bool is_integer = false;
     bool is_storage = false;
+    bool is_cube = false;
     bool is_srgb = false;
     AmdGpu::CompMapping dst_select{};
     AmdGpu::NumberConversion num_conversion{};
@@ -82,21 +83,22 @@ struct StageSpecialization {
     const Info* info{};
     RuntimeInfo runtime_info{};
     std::bitset<MaxStageResources> bitset{};
-    Gcn::FetchShaderData fetch_shader_data{};
-    SmallVector<VsAttribSpecialization, 32> vs_attribs;
-    SmallVector<BufferSpecialization, 16> buffers;
-    SmallVector<ImageSpecialization, 16> images;
-    SmallVector<FMaskSpecialization, 8> fmasks;
-    SmallVector<SamplerSpecialization, 16> samplers;
+    std::optional<Gcn::FetchShaderData> fetch_shader_data{};
+    boost::container::small_vector<VsAttribSpecialization, 32> vs_attribs;
+    boost::container::small_vector<BufferSpecialization, 16> buffers;
+    boost::container::small_vector<ImageSpecialization, 16> images;
+    boost::container::small_vector<FMaskSpecialization, 8> fmasks;
+    boost::container::small_vector<SamplerSpecialization, 16> samplers;
     Backend::Bindings start{};
 
     StageSpecialization() = default;
     StageSpecialization(const Info& info_, RuntimeInfo runtime_info_, const Profile& profile_,
                         Backend::Bindings start_)
         : info{&info_}, runtime_info{runtime_info_}, start{start_} {
-        if (info_.sw_stage == SwStage::Vertex && Gcn::ParseFetchShader(info_, fetch_shader_data)) {
+        fetch_shader_data = Gcn::ParseFetchShader(info_);
+        if (info_.sw_stage == SwStage::Vertex && fetch_shader_data) {
             // Specialize shader on VS input number types to follow spec.
-            ForEachSharp(vs_attribs, fetch_shader_data.attributes,
+            ForEachSharp(vs_attribs, fetch_shader_data->attributes,
                          [this](auto& spec, const auto& desc, AmdGpu::Buffer sharp) {
                              using InstanceIdType = Shader::Gcn::VertexAttribute::InstanceIdType;
                              if (const auto step_rate = desc.GetStepRate();
@@ -133,6 +135,7 @@ struct StageSpecialization {
                          spec.type = sharp.GetViewType(desc.is_array);
                          spec.is_integer = AmdGpu::IsInteger(sharp.GetNumberFmt());
                          spec.is_storage = desc.is_written;
+                         spec.is_cube = sharp.IsCube();
                          if (spec.is_storage) {
                              spec.dst_select = sharp.DstSelect();
                          } else {
@@ -180,7 +183,7 @@ struct StageSpecialization {
                 binding++;
                 continue;
             }
-            bitset[binding++] = true;
+            bitset.set(binding++);
             func(spec, desc, sharp);
         }
     }
@@ -214,7 +217,7 @@ struct StageSpecialization {
         // bindings still may change as they depend on previously processed FS. The check below
         // handles this case and prevents generation of redundant permutations. This is also safe
         // for other types of shaders with no bindings.
-        if (buffers.empty() && images.empty() && samplers.empty()) {
+        if (bitset.none() && other.bitset.none()) {
             return true;
         }
 
