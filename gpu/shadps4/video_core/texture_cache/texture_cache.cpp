@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
 #include <limits>
+#include <boost/container/small_vector.hpp>
 #include <xxhash.h>
 
 #include "bbport_process_memory.h"
@@ -304,7 +307,7 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
         auto new_info = requested_info;
         new_info.resources = std::max(requested_info.resources, cache_image.info.resources);
         new_info.UpdateSize();
-        const auto new_image_id = slot_images.Insert(instance, runtime, slot_image_views, new_info);
+        const auto new_image_id = InsertImage(new_info);
         RegisterImage(new_image_id);
 
         // insert() may have grown slot_images and moved every image: `cache_image` would then
@@ -566,7 +569,7 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
 }
 
 ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
-    const auto new_image_id = slot_images.Insert(instance, runtime, slot_image_views, info);
+    const auto new_image_id = InsertImage(info);
     RegisterImage(new_image_id);
 
     auto& src_image = slot_images[image_id];
@@ -693,7 +696,7 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     }
     // Create and register a new image
     if (!image_id) {
-        image_id = slot_images.Insert(instance, runtime, slot_image_views, info);
+        image_id = InsertImage(info);
         RegisterImage(image_id);
     }
 
@@ -901,7 +904,7 @@ void TextureCache::AssociateStencil(ImageId depth_id, const ImageInfo& depth_inf
         info.guest_address = depth_info.stencil_addr;
         info.guest_size = depth_info.stencil_size;
         info.size = depth_info.size;
-        stencil_id = slot_images.Insert(instance, runtime, slot_image_views, info);
+        stencil_id = InsertImage(info);
         RegisterImage(stencil_id);
     }
     Image& stencil_image = slot_images[stencil_id];
@@ -1458,7 +1461,81 @@ void TextureCache::TouchImage(Image& image) {
     image_lru_cache.Touch(image, gc_tick);
 }
 
-void TextureCache::DeleteImage(ImageId image_id) {
+ImageId TextureCache::InsertImage(const ImageInfo& info) {
+    const ImageId image_id = slot_images.Insert(instance, runtime, slot_image_views, info);
+    if (!slot_images[image_id].allocation_failed) [[likely]] {
+        return image_id;
+    }
+    // bbport: the GPU has no memory left for it, past the driver's budget too (4 GB cards, on
+    // entering a big area or the Hunter's Dream). Unused textures go at once, more each round,
+    // before the image is given up on: a moment's stutter instead of the game ending.
+    u64 freed = 0;
+    for (u64 want : {u64(64) << 20, u64(256) << 20, u64(1024) << 20}) {
+        want = std::max<u64>(want, u64(info.guest_size) * 2);
+        freed += ReclaimMemoryFor(info.guest_address, info.guest_size, want);
+        if (slot_images[image_id].RetryAllocation()) {
+            static int reported = 0;
+            if (reported < 8) {
+                ++reported;
+                std::printf("GPU: video memory full: %llu MiB of unused textures freed for a "
+                            "new %ux%u image\n",
+                            (unsigned long long)(freed >> 20), info.size.width, info.size.height);
+                std::fflush(stdout);
+            }
+            return image_id;
+        }
+    }
+    std::printf("GPU: video memory full: no memory for a %ux%u image after freeing %llu MiB of "
+                "unused textures\n",
+                info.size.width, info.size.height, (unsigned long long)(freed >> 20));
+    std::fflush(stdout);
+    UNREACHABLE_MSG("Failed allocating image with error {}",
+                    vk::to_string(vk::Result::eErrorOutOfDeviceMemory));
+    return image_id;
+}
+
+u64 TextureCache::ReclaimMemoryFor(VAddr addr, size_t size, u64 bytes) {
+    // Unused for 2 s: in no command buffer still being recorded, and with WaitSubmitted in
+    // none the GPU is still running, so destroying it at once is safe. Images holding GPU
+    // results (render targets) stay: writing them back here would stall in the middle of a
+    // draw; textures are uploaded again from guest memory when next used.
+    const u64 second = u64(std::chrono::duration_cast<std::chrono::seconds>(
+                               std::chrono::steady_clock::now().time_since_epoch())
+                               .count());
+    const u64 unused_tick = std::min(gc_tick, gc_tick_at_second[(second - 2) % gc_tick_at_second.size()]);
+    boost::container::small_vector<ImageId, 64> victims;
+    u64 freed = 0;
+    image_lru_cache.ForEachItemBelow(unused_tick, [&](Image& image) {
+        if (freed >= bytes) {
+            return true;
+        }
+        if (image.lru_touched_tick >= unused_tick || image.HasGpuValidData() ||
+            image.scene_proxy || image.usage.vo_surface || image.binding.is_bound ||
+            image.binding.is_target ||
+            image.allocation_failed || image.Overlaps(addr, size)) {
+            return false;
+        }
+        victims.push_back(slot_images.GetSlotId(image));
+        freed += Common::AlignUp(image.SizeBytes(), 1024);
+        return false;
+    });
+    if (victims.empty()) {
+        return 0;
+    }
+    scheduler.WaitSubmitted();
+    for (const ImageId image_id : victims) {
+        {
+            std::scoped_lock lk{slot_images[image_id].mutex};
+            UntrackImage(image_id);
+        }
+        UnregisterImage(image_id);
+        DeleteImage(image_id, true);
+        ++gc_evictions;
+    }
+    return freed;
+}
+
+void TextureCache::DeleteImage(ImageId image_id, bool now) {
     Image& image = slot_images[image_id];
     ASSERT_MSG(image.IsUntracked(), "Image was not untracked");
     ASSERT_MSG(False(image.flags & ImageFlagBits::Registered), "Image was not unregistered");
@@ -1483,15 +1560,21 @@ void TextureCache::DeleteImage(ImageId image_id) {
     }
 
     // Reclaim image and any image views it references.
-    scheduler.DeferOperation([this, image_id] {
-        Image& image = slot_images[image_id];
-        for (auto& backing : image.backing_images) {
-            for (const ImageViewId image_view_id : backing.image_view_ids) {
-                slot_image_views.Erase(image_view_id);
-            }
+    if (now) {
+        EraseImage(image_id);
+        return;
+    }
+    scheduler.DeferOperation([this, image_id] { EraseImage(image_id); });
+}
+
+void TextureCache::EraseImage(ImageId image_id) {
+    Image& image = slot_images[image_id];
+    for (auto& backing : image.backing_images) {
+        for (const ImageViewId image_view_id : backing.image_view_ids) {
+            slot_image_views.Erase(image_view_id);
         }
-        slot_images.Erase(image_id);
-    });
+    }
+    slot_images.Erase(image_id);
 }
 
 } // namespace VideoCore
