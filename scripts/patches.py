@@ -505,6 +505,7 @@ def main():
         elf=(a.out/'eboot.elf').read_bytes()
         try:
             quit_menu.check_original(lambda start,end: eboot_bytes(elf,start,end))
+            quit_menu.check_segments(eboot_segments(elf))
             writes+=quit_menu.code_writes()
             names.append('Quit to Desktop')
         except ValueError as error:
