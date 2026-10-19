@@ -71,18 +71,22 @@ def game_app_version(game):
         return None
 
 
+DEBUG_MENU='Restore Debug Menu (READ NOTES)'
+
+
 def validate_patch_requirements(names, game):
     if 'Restore Debug Camera' in names and 'Enemy Control' in names:
         raise ValueError('Restore Debug Camera conflicts with Enemy Control; enable only one')
-    if 'Restore Debug Menu (READ NOTES)' in names:
+    if DEBUG_MENU in names:
         font = game / 'dvdroot_ps4/font'
         missing = [name for name in ('DbgFont14h.ccm', 'DbgFont14h.tpf')
                    if not (font / name).is_file() or (font / name).stat().st_size == 0]
         if missing:
-            raise ValueError('Debug menu needs non-empty font files in '
-                             f'{font}: {", ".join(missing)}. Install the fonts from '
-                             'https://www.nexusmods.com/bloodborne/mods/253 first; '
-                             'or disable debug_menu in bbport.ini')
+            # `game` may be the mods' merged view (a temporary folder): name the game's folder.
+            raise ValueError('Debug menu needs its font files, missing or empty: '
+                             f'{", ".join("dvdroot_ps4/font/" + n for n in missing)}. Put them in the '
+                             'game folder or a mod (https://www.nexusmods.com/bloodborne/mods/253), '
+                             'or turn the debug menu off')
 
 
 def effect_patches(settings):
@@ -478,7 +482,14 @@ def main():
     if whole:  # other patches' code is not fingerprinted
         names+=[n.strip() for n in a.extra.split(';') if n.strip()]
     names+=[n for n in effect_patches(read_settings(a.settings)) if n not in names and GROUP_OF.get(n) in groups]
-    validate_patch_requirements(names,a.game_dir)
+    try:
+        validate_patch_requirements(names,a.game_dir)
+    except ValueError as error:
+        # Missing debug fonts stopped the launch (and the in-game toggle's restart) outright:
+        # the game starts without the debug menu instead.
+        if DEBUG_MENU not in names: raise
+        names.remove(DEBUG_MENU)
+        print(f'Patches: {error}. The game starts without the debug menu')
     segments=eboot_segments((a.out/'eboot.elf').read_bytes())
     writes=compile_patches(a.xml,names,a.app_version,segments)
     fps_count=len(compile_patches(a.xml,fps_names,a.app_version,segments)) if fps_names else 0  # the first writes
