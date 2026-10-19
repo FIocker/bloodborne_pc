@@ -100,6 +100,9 @@ static void write_target(const char *key, unsigned target) {
     rename(temp, path);
 }
 
+/* 1: open the level-up screen (reborn now, or levels still to regain from an earlier rebirth,
+ * which costs nothing more); 2: nothing to reset (already the origin's level); 0: not enough
+ * Insight. rebirth.py's patch turns bit 0 and bit 1 into the flags the Doll's script reads. */
 int runtime_rebirth(void) {
     pthread_mutex_lock(&lock);
     unsigned char *p = player();
@@ -107,10 +110,16 @@ int runtime_rebirth(void) {
     if (p && p[ORIGIN] < 9) {
         const uint8_t *origin = ORIGINS[p[ORIGIN]];
         const uint32_t insight = get32(p, INSIGHT), level = get32(p, LEVEL);
-        if (insight >= REBIRTH_INSIGHT && level > origin[0]) {
-            char key[96];
-            character_key(p, key, sizeof(key));
-            const unsigned target = read_target(key);
+        char key[96];
+        character_key(p, key, sizeof(key));
+        const unsigned target = read_target(key);
+        if (level < target) {
+            printf("Runtime: rebirth: levels %" PRIu32 " to %u still free to regain\n", level, target);
+            result = 1;
+        } else if (level <= origin[0]) {
+            printf("Runtime: rebirth: already the origin's level %u\n", origin[0]);
+            result = 2;
+        } else if (insight >= REBIRTH_INSIGHT) {
             write_target(key, target > level ? target : level);
             for (int i = 0; i < 6; ++i) put32(p, ATTRIBUTE[i], origin[i + 1]);
             put32(p, LEVEL, origin[0]);
@@ -119,8 +128,7 @@ int runtime_rebirth(void) {
                    level, origin[0], target > level ? target : level, insight, insight - REBIRTH_INSIGHT);
             result = 1;
         } else {
-            printf("Runtime: rebirth refused: Insight %" PRIu32 " (needs %d), level %" PRIu32 " (origin %u)\n",
-                   insight, REBIRTH_INSIGHT, level, origin[0]);
+            printf("Runtime: rebirth refused: Insight %" PRIu32 " (needs %d)\n", insight, REBIRTH_INSIGHT);
         }
     }
     pthread_mutex_unlock(&lock);

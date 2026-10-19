@@ -674,10 +674,14 @@ static void sample_host(PadData *d) {
         const float sx=mouse.dx*input_mouse_scale_x(&cfg->mouse), sy=mouse.dy*input_mouse_scale_y(&cfg->mouse);
         int mx=0, my=0;
         static int was_locked=-1;
+        static double locked_motion;
         if (mouse.locked_on!=was_locked) {
-            if (was_locked>=0) printf("Mouse: lock-on %s\n",mouse.locked_on ? "seen: mouse motion switches targets" : "ended");
+            if (was_locked>=0 && mouse.locked_on) printf("Mouse: lock-on seen: mouse motion switches targets\n");
+            else if (was_locked>=0) printf("Mouse: lock-on ended (%.0f counts of mouse motion meanwhile)\n",locked_motion);
             was_locked=mouse.locked_on;
+            locked_motion=0.0;
         }
+        if (mouse.locked_on) locked_motion+=fabs(mouse.dx)+fabs(mouse.dy);
         if (mouse.locked_on && cfg->mouse.lock_switch>0) {
             /* The right stick switches targets; the stick's smoothing starts fresh afterwards. */
             smoothed_mouse_stick_x=smoothed_mouse_stick_y=0.0;

@@ -27,8 +27,10 @@ import esd  # noqa: E402
 import quit_menu  # noqa: E402
 
 REBIRTH_INSIGHT = 5          # src/runtime_rebirth.c REBIRTH_INSIGHT
-REQUEST, RESULT = 72100090, 72100091   # unused flags in the Doll's range (721000xx)
-OPTION_TEXT, QUESTION_TEXT, SHORT_TEXT = 15000170, 10010790, 10010791  # free ids in FMG 30
+# Unused flags in the Doll's range (721000xx): the request, and the port's answer: open the
+# level-up screen (reborn now, or levels still to regain), or nothing to do.
+REQUEST, RESULT, NOTHING = 72100090, 72100091, 72100092
+OPTION_TEXT, QUESTION_TEXT, SHORT_TEXT, NOTHING_TEXT = 15000170, 10010790, 10010791, 10010792  # free in FMG 30
 TALK_FMG = 30
 DOLL_SCRIPTS = 'm21_00_00_00.talkesdbnd.dcx'   # the Hunter's Dream: the Doll is t210304 and more
 LEVEL_UP_TEXT = 15000100     # Channel Blood Echoes
@@ -49,9 +51,11 @@ ORIGINAL = {
 
 TEXTS = {
     'engus': ('Rebirth',
-              f'Be reborn? Your attributes and level return to those of your origin, and your '
-              f'levels can then be regained without Blood Echoes. Costs {REBIRTH_INSIGHT} Insight.',
-              f'Rebirth requires {REBIRTH_INSIGHT} Insight.'),
+              f'Be reborn for {REBIRTH_INSIGHT} Insight? Your attributes and level return to those of '
+              f'your origin. Your levels can then be regained without Blood Echoes, now or later '
+              f'with Channel Blood Echoes.',
+              f'Rebirth requires {REBIRTH_INSIGHT} Insight.',
+              'Your attributes are already those of your origin.'),
 }
 
 
@@ -66,14 +70,22 @@ def code_writes():
     cave.jmp(SET_FLAG_RESUME)
     if cave.here - original != 13:
         raise ValueError('flag hook layout')
+    # The port answers in eax: bit 0 opens the level-up screen (RESULT), bit 1 says there is
+    # nothing to reset (NOTHING). Both flags are set through the original function.
     cave.raw('57')                                        # rebirth: push rdi (aligned)
     cave.browser(0)
     cave.raw('5f')                                        # pop rdi
-    cave.raw('89c2')                                      # mov edx, eax
+    cave.raw('57 50 4883ec08'.replace(' ', ''))           # push rdi; push rax; sub rsp, 8
+    cave.raw('89c2 83e201'.replace(' ', ''))              # mov edx, eax; and edx, 1
     cave.raw('be' + struct.pack('<I', RESULT).hex())      # mov esi, RESULT
+    cave.call(original)
+    cave.raw('4883c408 58 5f'.replace(' ', ''))           # add rsp, 8; pop rax; pop rdi
+    cave.raw('89c2 d1ea 83e201'.replace(' ', ''))         # mov edx, eax; shr edx, 1; and edx, 1
+    cave.raw('be' + struct.pack('<I', NOTHING).hex())     # mov esi, NOTHING
     cave.jmp(original)
-    # Pricing: rax = the price; 0 when the port says the level is free (r13d: the screen's
-    # level before the change).
+    # Pricing: rax = the price; 0 when the port says the level is free. r13d is the price's
+    # level + 0x51 when raising (the screen's level + 0x51), and the screen's level + 0x50 when
+    # lowering: either way the level being bought or given back is r13d - 0x51.
     def price(level_fix, tail):
         at = cave.here
         cave.raw('c4e1fa2cc0')  # vcvttss2si rax, xmm0
@@ -90,8 +102,8 @@ def code_writes():
         cave.raw(tail)
         cave.raw('c3')
         return at
-    raise_price = price('', '8b8bf8010000')            # mov ecx, [rbx+0x1f8]
-    lower_price = price('ffce', '2983f4010000')        # dec esi | sub [rbx+0x1f4], eax
+    raise_price = price('83ee51', '8b8bf8010000')      # sub esi, 0x51 | mov ecx, [rbx+0x1f8]
+    lower_price = price('83ee51', '2983f4010000')      # sub esi, 0x51 | sub [rbx+0x1f4], eax
     strings = cave.here
     for name in 'bf':
         cave.data += f'bb:{name}'.encode() + b'\0'
@@ -174,7 +186,7 @@ def doll_script(data):
         if str(OPTION) in used:
             raise ValueError(f'talk list entry {OPTION} already used')
         next_id = max(st.id for st in group) + 1
-        ask, reborn, level_up, short = (esd.State(next_id + i) for i in range(4))
+        ask, reborn, level_up, short, nothing = (esd.State(next_id + i) for i in range(5))
         # Rebirth right after Channel Blood Echoes.
         at = next(i for i, c in enumerate(menu.entry)
                   if (c.bank, c.id) == (1, 19) and esd.disassemble(c.args[1]) == str(LEVEL_UP_TEXT))
@@ -187,13 +199,17 @@ def doll_script(data):
         ask.conditions = [esd.Condition(reborn, call_equals(22, [], 1)), esd.Condition(menu, call_equals(21, [], 0))]
         # The rebirth: the port answers through RESULT.
         reborn.entry = [command(1, 11, REQUEST, 1)]
-        reborn.conditions = [esd.Condition(level_up, call_equals(15, [RESULT], 1)), esd.Condition(short, b'\x41\xa1')]
+        reborn.conditions = [esd.Condition(level_up, call_equals(15, [RESULT], 1)),
+                             esd.Condition(nothing, call_equals(15, [NOTHING], 1)),
+                             esd.Condition(short, b'\x41\xa1')]
         # The level-up screen, as Channel Blood Echoes opens it (c1_31, open while f25(23) != 0).
         level_up.entry = [command(1, 11, RESULT, 0), esd.Command(1, 31, [])]
         level_up.conditions = [esd.Condition(menu, call_equals(25, [23], 0))]
         short.entry = [command(1, 17, 1, SHORT_TEXT, 1, 0, 1)]
         short.conditions = [esd.Condition(menu, call_equals(21, [], 0))]
-        group.extend([ask, reborn, level_up, short])
+        nothing.entry = [command(1, 11, NOTHING, 0), command(1, 17, 1, NOTHING_TEXT, 1, 0, 1)]
+        nothing.conditions = [esd.Condition(menu, call_equals(21, [], 0))]
+        group.extend([ask, reborn, level_up, short, nothing])
     return esd.write(script)
 
 
@@ -220,12 +236,12 @@ def write_layer(game, out, source=None):
         path = layered if layered and layered.is_file() else folder / 'menu.msgbnd.dcx'
         if not path.is_file():
             continue
-        option, question, short = TEXTS.get(name.casefold(), TEXTS['engus'])
+        option, question, short, nothing = TEXTS.get(name.casefold(), TEXTS['engus'])
         archive = path.read_bytes()
         bnd = quit_menu.unpack_dcx(archive)
         texts = {file_id: bnd[o:o + n] for _e, o, n, file_id in quit_menu.bnd4_files(bnd)}
         strings = quit_menu.read_fmg(texts[TALK_FMG])
-        strings.update({OPTION_TEXT: option, QUESTION_TEXT: question, SHORT_TEXT: short})
+        strings.update({OPTION_TEXT: option, QUESTION_TEXT: question, SHORT_TEXT: short, NOTHING_TEXT: nothing})
         replaced = quit_menu.rebuild_bnd4(bnd, {TALK_FMG: quit_menu.write_fmg(texts[TALK_FMG], strings)})
         target = Path(out) / 'dvdroot_ps4' / 'msg' / name / 'menu.msgbnd.dcx'
         target.parent.mkdir(parents=True, exist_ok=True)
