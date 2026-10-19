@@ -7,7 +7,7 @@ A file holds state groups; a state has entry, exit and while commands and condit
 condition has an evaluator (bytecode), commands run when it passes, a target state and
 sub-conditions. A command is (bank, id, [argument bytecode]). Offsets in the file are relative
 to the data start (0x6C) and are 64-bit. write(read(data)) == data for the game's files (checked
-by tests/test_esd.py); edits keep that layout, which is how the game's loader expects it.
+by tests/test_rebirth.py); edits keep that layout, which is how the game's loader expects it.
 
 Expression bytecode (enough to build arguments and evaluators):
   0x00-0x7F  push integer value-0x40          0x82 push int32      0x80 push float32

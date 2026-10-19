@@ -423,15 +423,7 @@ void BloodborneCam::Apply(uintptr_t pitch) {
 
     // Locked on: the game drives the camera; the window thread routes motion to the stick
     // instead, so a flick switches targets.
-    const float lock_value = ReadMemFast<float>(pitch + 0x154);
-    const bool locked = lock_value == 1.0f;
-    // The value read as lock-on, logged when it changes (to check the detection in play).
-    static float logged = -12345.0f;
-    if (lock_value != logged) {
-        logged = lock_value;
-        std::printf("Mouse camera: lock-on value %g (%s)\n", lock_value, locked ? "locked" : "free");
-        std::fflush(stdout);
-    }
+    const bool locked = ReadMemFast<float>(pitch + 0x154) == 1.0f;
     m_lockedOn.store(locked, std::memory_order_relaxed);
     if (locked || (xrel == 0.0f && yrel == 0.0f)) {
         return;
