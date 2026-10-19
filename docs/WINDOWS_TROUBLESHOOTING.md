@@ -32,9 +32,9 @@ Object motion vectors: off
 - **Graphics cards with 4 GB.** Discrete GPUs with up to 4.5 GB get a low-VRAM profile, shown in
   the log as `Low-VRAM profile (4096 MiB card): ...`. It raises the texture budget to the card's
   memory less 600 MiB. At 1080p output with an upscaler, it also patches the scene size at start
-  instead of changing it live (preset changes then need a restart). On CPUs with up to 8 threads
-  it turns the draw-preparation workers off. `BB_LOW_VRAM=0` in Extra variables turns the
-  profile off and `BB_LOW_VRAM=1` forces it.
+  instead of changing it live (preset changes then need a restart). On CPUs with up to 4 cores
+  it turns the draw-preparation workers off. **Advanced → Low-VRAM profile** (or `BB_LOW_VRAM=0`/`1`
+  in Extra variables) turns it off or forces it. The profile is from Fixdag and bashiku's 4 GB mod.
 - **The frame rate falls after some minutes (laptops).** `BB_THERMAL_LOG=1` in Extra variables
   writes `Thermal: GPU 87 C, 60 W: the driver is slowing the card down to cool it` to the log
   when an NVIDIA card is throttled for heat (checked every 20 seconds with `nvidia-smi`).

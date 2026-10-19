@@ -217,7 +217,7 @@ APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / 'CUSA03173'
                 'mods_dir': '', 'mods_enabled': True, 'patches_dir': '', 'language': '1',
                 'voice_language': 'auto',
                 'player_name': '', 'fullscreen': False, 'hdr': False, 'present_mode': 'Mailbox',
-                'fps_mode': 'uncap', 'frame_cap': '', 'draw_pipe': '', 'readbacks': '',
+                'fps_mode': 'uncap', 'frame_cap': '', 'draw_pipe': '', 'readbacks': '', 'low_vram': '',
                 'frames_ahead': '', 'frame_stats': False, 'gpu_profile': False,
                 'vk_validation': False, 'extra_env': '', 'close_on_play': False,
                 'check_updates': True, 'save_backups': False, 'online': False, 'online_server': 'srv.shadps4.net:31313',
@@ -283,6 +283,9 @@ DRAW_PIPE = [('', ('Auto (8+ threads)', 'Авто (8+ потоков)')), ('1', 
              ('0', ('Off (more stable)', 'Выключен (стабильнее)'))]
 READBACKS = [('', ('Relaxed (default)', 'Relaxed (по умолчанию)')), ('0', ('Off', 'Выключены')),
              ('2', ('Precise',))]
+# BB_LOW_VRAM (run.py's low-VRAM profile): '' leaves it to the card's memory.
+LOW_VRAM = [('', ('Auto (4 GB cards)', 'Авто (карты на 4 ГБ)')), ('1', ('On', 'Включён')),
+            ('0', ('Off', 'Выключен'))]
 # Frame cap of the unlocked mode (BB_FPS_LIMIT). '' leaves the port's own: the display refresh,
 # at most 120, because the game's movement timing breaks above about 120 FPS.
 FRAME_CAPS = [('', ('Auto: display refresh, max 120 (recommended)', 'Авто: частота монитора, макс. 120 (рекомендуется)')),
@@ -515,7 +518,8 @@ def game_environment(s):
     env['BB_FPS'] = s['fps_mode']
     if s.get('frame_cap', ''):
         env['BB_FPS_LIMIT'] = s['frame_cap']
-    for key, name in (('draw_pipe', 'BB_DRAW_PIPE'), ('readbacks', 'BB_READBACKS'), ('frames_ahead', 'BB_FRAMES_AHEAD')):
+    for key, name in (('draw_pipe', 'BB_DRAW_PIPE'), ('readbacks', 'BB_READBACKS'), ('frames_ahead', 'BB_FRAMES_AHEAD'),
+                      ('low_vram', 'BB_LOW_VRAM')):
         if s[key]:
             env[name] = s[key]
     for key, name in (('frame_stats', 'BB_FRAME_STATS'), ('gpu_profile', 'BB_GPU_PROFILE'),
@@ -2092,6 +2096,15 @@ class Launcher:
         self.row(f, _('GPU readbacks', 'Чтение данных GPU'), self.choice(f, 'readbacks', 'app', READBACKS),
                  _('How exactly data the GPU writes is copied back for the game.',
                    'Насколько точно данные, записанные GPU, возвращаются игре.'))
+        self.row(f, _('Low-VRAM profile', 'Профиль для малого объёма видеопамяти'),
+                 self.choice(f, 'low_vram', 'app', LOW_VRAM),
+                 _('A larger texture budget and, at 1080p with an upscaler, a smaller scene from the start '
+                   '(preset changes then need a restart).',
+                   'Больший бюджет текстур и, при 1080p с апскейлером, уменьшенная сцена с запуска '
+                   '(смена пресета тогда требует перезапуска).'))
+        ttk.Label(f, text=_('Low-VRAM profile by Fixdag and bashiku.',
+                            'Профиль для малого объёма видеопамяти: Fixdag и bashiku.'),
+                  style='Muted.TLabel').grid(row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(8, 0))
         self.section(f, _('Diagnostics', 'Для разработчика'))
         self.check(f, 'frame_stats', 'app', _('Frame statistics in the log (every 5 s)', 'Статистика кадров в журнале (раз в 5 с)'))
         self.check(f, 'gpu_profile', 'app', _('GPU time per pass in the log', 'Профиль GPU в журнале'))

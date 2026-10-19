@@ -142,6 +142,9 @@ adapted from [bbhost](https://github.com/droogie/bbhost) by droogie (GPL-3.0-or-
 team for their guidance, and to Wozzardman's [shadp2p](https://github.com/Wozzardman/shadp2p),
 which bbport's first online version was built on.
 
+The low-VRAM profile for 4 GB graphics cards comes from the 4 GB mod by **Fixdag** and
+**bashiku**.
+
 Also used: [FSR-Vulkan](https://github.com/FireBurn/FSR-Vulkan) and the AMD FidelityFX SDK
 (FSR), FSR 4 assets from [FireBurn/Q2RTX](https://github.com/FireBurn/Q2RTX), the DLSS bridge
 adapted from [IFreemz/shadPS4-Bloodborne-DLSS-FSR](https://github.com/IFreemz/shadPS4-Bloodborne-DLSS-FSR),
