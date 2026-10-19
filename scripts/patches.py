@@ -521,6 +521,18 @@ def main():
             names.append('Quit to Desktop')
         except ValueError as error:
             print(f'Patches: {error}; Quit to Desktop skipped')
+    if read_settings(a.settings).get('rebirth','1')!='0' and os.environ.get('BB_REBIRTH')!='0':
+        # Rebirth at the Doll (rebirth.py; the talk script and texts are a mod layer).
+        sys.path.insert(0,str(Path(__file__).resolve().parent))
+        import quit_menu, rebirth
+        elf=(a.out/'eboot.elf').read_bytes()
+        try:
+            rebirth.check_original(lambda start,end: eboot_bytes(elf,start,end))
+            quit_menu.check_segments(eboot_segments(elf))
+            writes+=rebirth.code_writes()
+            names.append('Rebirth')
+        except ValueError as error:
+            print(f'Patches: {error}; Rebirth skipped')
     if a.patches_dir and whole:
         # After the built-in ones: an external patch of the same bytes wins.
         selected=external_selection(external_patches(a.patches_dir,a.app_version,a.xml),a.patches_config)

@@ -278,6 +278,15 @@ def main():
             shutil.rmtree(text_layer, ignore_errors=True)
             env['BB_QUIT_TO_DESKTOP'] = '0'  # patches.py: no menu entries without their texts
             print('Quit to Desktop: its menu texts could not be written; the game starts without it')
+    # Rebirth at the Doll (bbport.ini rebirth, patches.py): the Doll's talk script and its texts
+    # (on top of Quit to Desktop's, which edit the same menu text archives), a layer below the mods.
+    rebirth_layer = out / 'rebirth'
+    shutil.rmtree(rebirth_layer, ignore_errors=True)
+    if ini_value(config, 'rebirth') != '0' and (game_app_version(game) in (None, '01.09') or env.get('BB_FORCE_PATCHES')):
+        if not run_script('rebirth.py', game, '--out', rebirth_layer, '--source', text_layer, optional=True):
+            shutil.rmtree(rebirth_layer, ignore_errors=True)
+            env['BB_REBIRTH'] = '0'  # patches.py: no eboot hooks without the Doll's script
+            print("Rebirth: the Doll's script could not be written; the game starts without it")
     # Ultrawide outputs: the menu movies with full-screen backdrops widened and the HUD's corner
     # groups toward the screen edges (bbport.ini hud_position, 0 centred .. 100 edges), a layer
     # below the mods. Only with the resolution patches, which widen the camera and HUD canvas
@@ -306,14 +315,15 @@ def main():
     mod_args = [game, '--out', out, '--mods-dir', env.get('BB_MODS_DIR', data / 'mods'),
                 '--config', env.get('BB_MODS_CONFIG', data / 'mods.json'),
                 '--enabled', env.get('BB_MODS_ENABLED', '1')]
-    view = run_script('mods.py', *mod_args, '--layer', text_layer, '--layer', hud_layer, '--layer', fov_layer,
-                      capture=True, optional=True)
+    view = run_script('mods.py', *mod_args, '--layer', text_layer, '--layer', rebirth_layer, '--layer', hud_layer,
+                      '--layer', fov_layer, capture=True, optional=True)
     if view is None:
         # The game view could not be made with the port's own layers (Quit to Desktop's texts,
         # the HUD layout); without them the game still starts, as it did before they existed.
         print('Mods: the game view could not be made; starting without Quit to Desktop and the '
               'HUD layout')
         env['BB_QUIT_TO_DESKTOP'] = '0'
+        env['BB_REBIRTH'] = '0'
         view = run_script('mods.py', *mod_args, capture=True)
     game = Path(view.strip())
     mod_view = game if game.resolve() != original_game else None

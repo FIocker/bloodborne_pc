@@ -202,6 +202,8 @@ TWEAKS = [
                               'Японская раскладка: Круг — подтверждение и действие, Крест — уклонение'), False),
     ('quit_to_desktop', ('Quit to Desktop in the title menu and in the System menu',
                          'Пункт «Выйти на рабочий стол» в главном меню и в меню «Система»'), True),
+    ('rebirth', ("Rebirth at the Doll: back to your origin's attributes for 5 Insight, levels regained free",
+                 'Перерождение у Куклы: характеристики происхождения за 5 озарений, уровни возвращаются бесплатно'), True),
 ]
 INI_FLAGS = {'sharpen', 'object_motion', 'show_fps', 'mute_unfocused', 'frame_gen_fit_display',
              *(k for k, _t, _o in EFFECTS + EXTRAS + CHEATS + TWEAKS)}

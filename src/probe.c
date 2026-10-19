@@ -645,6 +645,7 @@ int main(int argc, char **argv) {
         }
     }
     image = allocate(round_page(size));
+    runtime_rebirth_set_image(image);
     if (fread(image, 1, size, f) != size || fgetc(f) != EOF) fail("incorrect memory image size");
     fclose(f);
     if (!cpu_only) {
