@@ -418,6 +418,53 @@ static void test_mouse_end_to_end(void) {
     puts("PASS: mouse end to end through pad_read_state (captured gate, right-stick deflection)");
 }
 
+/* Locked on with the direct camera: mouse motion switches targets with full flicks of the right
+ * stick, one per mouse_lock_switch counts, apart; small motion does not move the stick. */
+static void test_lock_on_switch(void) {
+    char config_path[]="/tmp/bbport-pad-test-lock-XXXXXX";
+    int fd=mkstemp(config_path);
+    assert(fd>=0);
+    FILE *f=fdopen(fd,"w");
+    assert(f);
+    fputs("mouse_to_joystick = right\nmouse_camera = direct\n",f);
+    fclose(f);
+    setenv("BB_INPUT_CONFIG",config_path,1);
+    free(loaded_config); config_initialized=0; loaded_config=NULL;
+    lock_flick_until_us=lock_flick_ready_us=0;
+
+    PadData data;
+    stub_mouse=(BbMouseInput){.dx=20.0f,.captured=1,.locked_on=1};
+    assert(pad_read_state(1,&data)==0);
+    assert(data.right_x==128 && data.right_y==128); /* under the threshold: no stick at all */
+    stub_mouse=(BbMouseInput){.dx=50.0f,.captured=1,.locked_on=1};
+    assert(pad_read_state(1,&data)==0);
+    assert(data.right_x==255 && data.right_y==128); /* 70 counts right: a full flick right */
+    stub_mouse=(BbMouseInput){.captured=1,.locked_on=1};
+    assert(pad_read_state(1,&data)==0);
+    assert(data.right_x==255); /* held for the flick's 100 ms */
+    usleep(120000);
+    assert(pad_read_state(1,&data)==0);
+    assert(data.right_x==128); /* then neutral */
+    stub_mouse=(BbMouseInput){.dx=-200.0f,.captured=1,.locked_on=1};
+    assert(pad_read_state(1,&data)==0);
+    assert(data.right_x==128); /* within the cooldown: no second flick, nothing saved up */
+    usleep(250000);
+    stub_mouse=(BbMouseInput){.dy=-80.0f,.captured=1,.locked_on=1};
+    assert(pad_read_state(1,&data)==0);
+    assert(data.right_x==128 && data.right_y==1); /* after it: up */
+
+    lock_flick_until_us=lock_flick_ready_us=0;
+    stub_mouse=(BbMouseInput){.dx=20.0f,.captured=1,.locked_on=0};
+    assert(pad_read_state(1,&data)==0);
+    assert(data.right_x>128 && data.right_x<255); /* not locked on: the usual mouse stick */
+
+    stub_mouse=(BbMouseInput){0};
+    unsetenv("BB_INPUT_CONFIG");
+    unlink(config_path);
+    free(loaded_config); config_initialized=0; loaded_config=NULL;
+    puts("PASS: lock-on target switching with the mouse");
+}
+
 /* T2: a custom input.ini end to end through pad_read_state -- proves the file is actually
  * found, parsed and wired into sample_host via BB_INPUT_CONFIG, not just that
  * test_binding_evaluation's lower-level calls work in isolation. Keys cannot be held under the
@@ -515,6 +562,7 @@ int main(void) {
     test_custom_binding_config();
     test_reload_on_f8();
     test_mouse_end_to_end();
+    test_lock_on_switch();
     PadData data;
     inject(path,"cross l3 touchpad_left");
     assert(pad_read_state(1,&data)==0);

@@ -78,6 +78,9 @@ typedef struct {
     float sensitivity_y;      /* mouse_sensitivity_y: vertical as a multiple of horizontal, 1.0 */
     int camera_sync;          /* mouse_camera_sync = on (default) | off: the direct camera turns
                                * its drawn position too, so a turn is not eased in by a spring */
+    int lock_switch;          /* mouse_lock_switch = mouse counts that switch the lock-on target
+                               * (direct camera, runtime_pad.c lock_switch_flick); 0 = the
+                               * mouse drives the stick while locked on, as in stick mode */
 } MouseParams;
 
 /* The mouse motion's multipliers from MouseParams: -1 for an inverted axis, the vertical one

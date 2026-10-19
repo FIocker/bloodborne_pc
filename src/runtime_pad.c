@@ -69,6 +69,9 @@ static size_t reads;
 static uint8_t connected_count;
 static uint64_t last_mouse_sample_us; /* CNV-003: dt since the previous mouse-to-stick sample */
 static double smoothed_mouse_stick_x, smoothed_mouse_stick_y; /* mouse_to_axis's EMA state */
+static double lock_switch_x, lock_switch_y;  /* lock_switch_flick: motion gathered while locked on */
+static int lock_flick_x, lock_flick_y;       /* the flick being sent */
+static uint64_t lock_flick_until_us, lock_flick_ready_us;
 
 static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u; }
 static uint8_t trigger(int16_t v) { int x=v>>7; return (uint8_t)(x<0 ? 0 : x>255 ? 255 : x); }
@@ -447,6 +450,32 @@ static void mouse_to_axis(float dx, float dy, double dt_ms, const MouseParams *m
     *out_y=y<-127?-127:y>127?127:y;
 }
 
+/* Lock-on target switching with the direct mouse camera, as in Dark Souls III on PC: while
+ * locked on, the game turns the camera and the right stick only switches targets, with a flick.
+ * Mouse motion through mouse_to_axis gave a flick only for very fast swipes (a normal move stays
+ * well inside the game's threshold, and the output lerp softens it further), so moving the mouse
+ * did not switch. Here motion is gathered (fading over ~150 ms, so slow drift does not add up),
+ * and once it passes mouse_lock_switch counts the stick is pushed fully that way for 100 ms, then
+ * left neutral for 250 ms so the game sees each flick on its own. Returns 1 while it sends one. */
+static int lock_switch_flick(float dx, float dy, double dt_ms, int threshold, int *out_x, int *out_y) {
+    const uint64_t now=now_us();
+    const double fade=exp(-dt_ms/150.0);
+    lock_switch_x=lock_switch_x*fade+dx;
+    lock_switch_y=lock_switch_y*fade+dy;
+    if (now>=lock_flick_ready_us && (fabs(lock_switch_x)>=threshold || fabs(lock_switch_y)>=threshold)) {
+        const int horizontal=fabs(lock_switch_x)>=fabs(lock_switch_y);
+        lock_flick_x=horizontal ? (lock_switch_x<0 ? -127 : 127) : 0;
+        lock_flick_y=horizontal ? 0 : (lock_switch_y<0 ? -127 : 127);
+        lock_flick_until_us=now+100000;
+        lock_flick_ready_us=now+350000;
+        lock_switch_x=lock_switch_y=0.0;
+    }
+    if (now<lock_flick_until_us) { *out_x=lock_flick_x; *out_y=lock_flick_y; return 1; }
+    if (now<lock_flick_ready_us) lock_switch_x=lock_switch_y=0.0; /* no motion saved up meanwhile */
+    *out_x=*out_y=0;
+    return 0;
+}
+
 /* GUD-002: the loaded config is immutable once published; a reload (F8) builds a whole new one
  * off the pad lock (I/O stays off the hot path) and only the pointer swap happens under `lock`,
  * which already serializes every call into this file through pad_read_state. */
@@ -628,17 +657,25 @@ static void sample_host(PadData *d) {
         if (dt_ms<1.0) dt_ms=1.0;
         if (dt_ms>100.0) dt_ms=100.0;
         last_mouse_sample_us=now;
+        const float sx=mouse.dx*input_mouse_scale_x(&cfg->mouse), sy=mouse.dy*input_mouse_scale_y(&cfg->mouse);
         int mx=0, my=0;
-        mouse_to_axis(mouse.dx*input_mouse_scale_x(&cfg->mouse),mouse.dy*input_mouse_scale_y(&cfg->mouse),
-                      dt_ms,&cfg->mouse,&mx,&my);
-        int *tx=cfg->mouse.stick==1 ? &lx : &rx, *ty=cfg->mouse.stick==1 ? &ly : &ry;
-        *tx+=mx; *ty+=my;
-        *tx=*tx<-127?-127:*tx>127?127:*tx; *ty=*ty<-127?-127:*ty>127?127:*ty;
+        if (mouse.locked_on && cfg->mouse.lock_switch>0) {
+            /* The right stick switches targets; the stick's smoothing starts fresh afterwards. */
+            smoothed_mouse_stick_x=smoothed_mouse_stick_y=0.0;
+            if (lock_switch_flick(sx,sy,dt_ms,cfg->mouse.lock_switch,&mx,&my)) { rx=mx; ry=my; }
+        } else {
+            lock_switch_x=lock_switch_y=0.0;
+            mouse_to_axis(sx,sy,dt_ms,&cfg->mouse,&mx,&my);
+            int *tx=cfg->mouse.stick==1 ? &lx : &rx, *ty=cfg->mouse.stick==1 ? &ly : &ry;
+            *tx+=mx; *ty+=my;
+            *tx=*tx<-127?-127:*tx>127?127:*tx; *ty=*ty<-127?-127:*ty>127?127:*ty;
+        }
     } else {
         /* MOU-005/CNV-002: no stale dt or velocity-filter memory survives a capture gap -- the
          * next capture must start the EMA fresh, not carry over speed from before the gap. */
         last_mouse_sample_us=0;
         smoothed_mouse_stick_x=smoothed_mouse_stick_y=0.0;
+        lock_switch_x=lock_switch_y=0.0;
     }
 
     if (button_output_held(&host,cfg,OUT_LEFTJOYSTICK_HALFMODE)) { lx/=2; ly/=2; }

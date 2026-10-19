@@ -327,6 +327,14 @@ static void ParseMouseSensitivityY(InputConfig *cfg, const char *value) {
     cfg->mouse.sensitivity_y = v;
 }
 
+/* mouse_lock_switch = 0..2000: mouse counts that switch the lock-on target (0 = off). */
+static void ParseMouseLockSwitch(InputConfig *cfg, const char *value) {
+    int ok;
+    float v = ParseFloatStrict(value, &ok);
+    if (!ok || v < 0.0f || v > 2000.0f) { ++cfg->warnings; return; }
+    cfg->mouse.lock_switch = (int)v;
+}
+
 /* stick_socd = last|neutral: what two opposite directions held together give (runtime_pad.c,
  * resolve_axis_pair). last = the most recent one (default), neutral = they cancel out. */
 static void ParseStickSocd(InputConfig *cfg, const char *value) {
@@ -448,6 +456,11 @@ static void ParseLine(ParseState *state, char *line) {
         ParseMouseSensitivityY(cfg, input_raw);
         return;
     }
+    if (EqualsCaseInsensitive(output_raw, "mouse_lock_switch")) {
+        if (!state->hotkeys_pass) return;
+        ParseMouseLockSwitch(cfg, input_raw);
+        return;
+    }
     if (EqualsCaseInsensitive(output_raw, "stick_socd")) {
         if (!state->hotkeys_pass) return;
         ParseStickSocd(cfg, input_raw);
@@ -565,6 +578,7 @@ void input_config_parse(InputConfig *out, const char *text) {
     out->mouse.camera_sensitivity = 1.0f;
     out->mouse.sensitivity_y = 1.0f;
     out->mouse.camera_sync = 1;
+    out->mouse.lock_switch = 60;
     for (int i = 0; i < DEADZONE_COUNT; ++i) { out->deadzone[i].inner = 1; out->deadzone[i].outer = 127; }
     out->stick_socd_last = 1;
     /* Defaults that keep a keyboard sprint through direction changes (cassioKenji, PR #74). */

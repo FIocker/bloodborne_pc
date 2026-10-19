@@ -132,6 +132,13 @@ static void TestMouseInvertAndVerticalSensitivity(void) {
     assert(cfg.mouse.camera_sync == 1);
     input_config_parse(&cfg, "mouse_camera_sync = off\n");
     assert(cfg.warnings == 0 && cfg.mouse.camera_sync == 0);
+
+    /* mouse_lock_switch: 60 counts unless set; 0 turns it off; out of range warns. */
+    assert(cfg.mouse.lock_switch == 60);
+    input_config_parse(&cfg, "mouse_lock_switch = 0\n");
+    assert(cfg.warnings == 0 && cfg.mouse.lock_switch == 0);
+    input_config_parse(&cfg, "mouse_lock_switch = 120\nmouse_lock_switch = -1\n");
+    assert(cfg.warnings == 1 && cfg.mouse.lock_switch == 120);
 }
 
 /* A combo is rejected (one warning, no binding) with more than three inputs, an analog or

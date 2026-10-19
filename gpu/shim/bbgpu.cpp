@@ -379,6 +379,8 @@ extern "C" void bbgpu_mouse_take(BbMouseInput* out) {
     out->buttons = mouse.buttons;
     out->wheel = mouse.wheel;
     out->captured = mouse.captured ? 1 : 0;
+    const Core::BloodborneCam& cam = Core::BloodborneCam::Instance();
+    out->locked_on = cam.IsEnabled() && cam.IsLockedOn() ? 1 : 0;
 }
 
 extern "C" void bbgpu_input_configure(int mouse_mode_available, int32_t toggle_scancode, int32_t reload_scancode) {

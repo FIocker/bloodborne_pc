@@ -57,6 +57,7 @@ typedef struct {
     uint32_t buttons;
     uint32_t wheel;
     int32_t captured;
+    int32_t locked_on; /* the direct mouse camera sees a lock-on target (motion reaches dx/dy) */
 } BbMouseInput;
 void bbgpu_mouse_take(BbMouseInput *out);
 /* Applies a just-(re)loaded input.ini to the window thread: whether mouse-to-joystick mode
