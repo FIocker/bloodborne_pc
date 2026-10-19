@@ -218,7 +218,7 @@ APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / 'CUSA03173'
                 'fps_mode': 'uncap', 'frame_cap': '', 'draw_pipe': '', 'readbacks': '',
                 'frames_ahead': '', 'frame_stats': False, 'gpu_profile': False,
                 'vk_validation': False, 'extra_env': '', 'close_on_play': False,
-                'check_updates': True, 'online': False, 'online_server': 'srv.shadps4.net:31313',
+                'check_updates': True, 'save_backups': False, 'online': False, 'online_server': 'srv.shadps4.net:31313',
                 'online_webapi': '', 'online_npid': '', 'online_password': '', 'online_upnp': True,
                 'online_community': COMMUNITY_SERVER, 'online_pool': 'shadnet', 'bridge_live_map': False,
                 'supermedo_user': '', 'supermedo_password': '', 'thd_online_id': '', 'thd_token': ''}
@@ -493,6 +493,8 @@ def game_environment(s):
     env['BB_GAME_DIR'] = s['game_dir']
     if s['user_dir']:
         env['BB_USER_DIR'] = s['user_dir']
+    if s.get('save_backups'):
+        env['BB_SAVE_BACKUPS'] = '1'
     if s['dlc_dir']:
         env['BB_DLC_DIR'] = s['dlc_dir']
     env['BB_MODS_DIR'] = s['mods_dir'] or str(DATA_DIR / 'mods')
@@ -923,6 +925,10 @@ class Launcher:
         ttk.Checkbutton(quick, text=_('Fullscreen', 'Полный экран'), variable=self.var('fullscreen', 'app')).grid(
             row=self.next_row(quick), column=1, sticky='w', pady=(8, 0))
         ttk.Checkbutton(quick, text=_('Play online'), variable=self.var('online', 'app')).grid(
+            row=self.next_row(quick), column=1, sticky='w', pady=(4, 0))
+        ttk.Checkbutton(quick, text=_('Back up saves at start (last 10 kept)',
+                                      'Копировать сохранения при запуске (10 последних)'),
+                        variable=self.var('save_backups', 'app')).grid(
             row=self.next_row(quick), column=1, sticky='w', pady=(4, 0))
         ttk.Button(quick, text=_('Add to Steam'), command=self.add_to_steam).grid(
             row=self.next_row(quick), column=1, sticky='w', pady=(10, 0))

@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 PORT = Path(__file__).resolve().parent
 
@@ -176,9 +177,34 @@ def find_executable(name):
     return None
 
 
+SAVE_BACKUPS_KEPT = 10
+
+
+def backup_saves(user_dir, keep=SAVE_BACKUPS_KEPT, now=None):
+    """BB_SAVE_BACKUPS=1 (launcher: Play page, "Back up saves at start"): a copy of the saves
+    in <user>/save-backups/<time>/savedata before the game starts, the newest `keep` kept.
+    A failed copy is reported and the game starts anyway. Returns the copy, or None."""
+    saves = Path(user_dir) / 'savedata'
+    if not saves.is_dir() or not any(saves.rglob('userdata*')):
+        return None
+    root = Path(user_dir) / 'save-backups'
+    target = root / time.strftime('%Y%m%d-%H%M%S', time.localtime(now)) / 'savedata'
+    try:
+        if not target.exists():
+            shutil.copytree(saves, target)
+        for old in sorted(p for p in root.iterdir() if p.is_dir())[:-keep]:
+            shutil.rmtree(old, ignore_errors=True)
+    except OSError as error:
+        print(f'Save backup: {error}; the game starts without one')
+        return None
+    print(f'Save backup: {target.parent}')
+    return target
+
+
 def main():
     args = sys.argv[1:]
-    if len(args) >= 2 and args[0] == '--after':
+    restarted = len(args) >= 2 and args[0] == '--after'
+    if restarted:
         wait_for(int(args[1]))
         args = args[2:]
     # As run.sh: relative paths (BB_GAME_DIR, BB_DATA_DIR, fsr4_shaders/) are from the port.
@@ -365,6 +391,8 @@ def main():
         user_dir = Path(env.get('BB_USER_DIR', data / 'user')).resolve()
         user_dir.mkdir(parents=True, exist_ok=True)
         env.setdefault('BB_GPU_USER_DIR', str(user_dir))
+        if env.get('BB_SAVE_BACKUPS') == '1' and not restarted:  # not again for an in-game restart
+            backup_saves(user_dir)
         if env.get('BB_ONLINE') == '1' and env.get('BB_NET_BACKEND') == 'thd':
             hunters_dream(env, user_dir)
         elif env.get('BB_ONLINE') == '1':

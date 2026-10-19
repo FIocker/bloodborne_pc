@@ -154,6 +154,7 @@ class Run:
         for key in [k for k in env if k.startswith(('BB_SHADNET', 'BB_THD_', 'BB_COMMUNITY'))]:
             env.pop(key)
         env.pop('BB_NET_BACKEND', None)
+        env.pop('BB_SAVE_BACKUPS', None)  # the benchmark's own save: nothing to keep
         env['BB_ONLINE'] = '0'
         env.update(BB_PAD_FILE=str(pad.path), BB_FPS_LOG='1', BB_FRAME_STATS='1',
                    BB_FRAME_DUMP_TRIGGER=str(self.out / 'shot'), BB_DUMP_DIR=str(self.out),
