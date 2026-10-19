@@ -134,7 +134,10 @@ from bbport_input_config import (STICK_OUTPUTS, OUTPUT_LABELS, ACTION_GROUPS, SL
                                   button_num_to_name, input_ini_path, load_input_ini, reserved_keys,
                                   save_input_ini, save_mouse_settings, wheel_to_name, MAX_COMBO,
                                   MODIFIER_NAMES, apply_layout, slot_conflicts, binding_parts,
-                                  display_name)  # noqa: E402
+                                  display_name, CONTROLLER_OUTPUTS, DEFAULT_CONTROLLER,
+                                  controller_conflicts, controller_display_name,
+                                  load_controller_bindings, save_controller_bindings)  # noqa: E402
+import bbport_gamepad  # noqa: E402
 
 LANG = 'en'
 
@@ -576,6 +579,10 @@ class Launcher:
         # Controls page after a cancelled edit shows what is actually on disk, not a half-edit.
         self.remap_edits = {}
         self.mouse_edited = False  # set by any mouse widget's command/trace; gates the save in collect()
+        # The Controller section: {output: controller button or None}, edits apart as above.
+        self.controller_bindings = load_controller_bindings(self.remap_lines)
+        self.controller_edits = {}
+        self.pads = None  # bbport_gamepad.Pads, opened the first time a controller slot listens
         self.vars = {}
         self.process = self.job = None
         self.hidden = False  # closed while the game runs: it exits with the game
@@ -1510,12 +1517,10 @@ class Launcher:
     def build_controls(self):
         ttk, tk = self.ttk, self.tk
         f = self.scrolled_page('controls', _('Controls', 'Управление'),
-                               _('Keyboard and mouse bindings, up to three per action. The '
-                                 'controller keeps working side by side; edit its lines in '
-                                 'input.ini directly — see docs/INPUT.md.',
-                                 'Раскладка клавиатуры и мыши, до трёх привязок на действие. '
-                                 'Геймпад продолжает работать одновременно; его строки можно '
-                                 'настроить только в input.ini — см. docs/INPUT.md.'))
+                               _('Keyboard and mouse bindings, up to three per action, and the '
+                                 'controller\'s buttons below. Both work side by side.',
+                                 'Раскладка клавиатуры и мыши, до трёх привязок на действие, и '
+                                 'кнопки геймпада ниже. Работают одновременно.'))
         self.remap_rows = {}  # output -> ([slot buttons], conflict label)
         self.remap_listening = False
         self.mouse_vars = {}  # mouse_settings key -> its widget's variable (apply_layout_preset)
@@ -1586,6 +1591,8 @@ class Launcher:
                        'также клавиши переключения мыши и перезагрузки input.ini (по умолчанию '
                        'F7/F8).'))
 
+        self.build_controller_bindings(f)
+
         self.section(f, _('Mouse look', 'Обзор мышью'))
         ms = self.mouse_settings
 
@@ -1636,9 +1643,9 @@ class Launcher:
                        variable=camera_var, value='stick').pack(side='left', padx=(16, 0))
         self.row(f, _('Camera', 'Камера'), camera_box,
                  _('Direct turns the game\'s camera by exact angles: no stick acceleration or '
-                   'turn-speed cap. It falls back to the stick while locked on.',
+                   'turn-speed cap. While locked on, moving the mouse switches target.',
                    'Прямая поворачивает камеру игры на точные углы: без ускорения стика и '
-                   'предела скорости поворота. При захвате цели работает как стик.'))
+                   'предела скорости поворота. При захвате цели движение мыши переключает цель.'))
         slider_row('camera_sensitivity', _('Sensitivity (direct)', 'Чувствительность (прямая)'),
                    _('How far the direct camera turns per mouse movement (1.00 = 900 counts per '
                      'radian).', 'Насколько поворачивается прямая камера при движении мыши (1.00 = '
@@ -1676,6 +1683,110 @@ class Launcher:
                        'reload input.ini without restarting.',
                        'Изменения применяются при следующем запуске игры, либо нажмите F8 в '
                        'игре, чтобы перечитать input.ini без перезапуска.'), top=6)
+
+    def build_controller_bindings(self, f):
+        """The Controller section: one controller button per game action, chosen by pressing it."""
+        ttk = self.ttk
+        self.section(f, _('Controller', 'Геймпад'))
+        self.note(f, _('Click a slot, then press the controller button for that action; Esc cancels. '
+                       'Right-click a slot to put back its default. A button on two actions presses '
+                       'both. The sticks always move and turn the camera.',
+                       'Щёлкните ячейку и нажмите кнопку геймпада для этого действия; Esc отменяет. '
+                       'Правый клик возвращает кнопку по умолчанию. Кнопка на двух действиях нажимает '
+                       'оба. Стики всегда отвечают за движение и камеру.'), top=2)
+        table = ttk.Frame(f)
+        table.grid(row=self.next_row(f), column=0, columnspan=2, sticky='w')
+        table.columnconfigure(1, minsize=self.px(150))
+        self.controller_rows = {}
+        self.controller_listening = False
+        for (group, group_ru), actions in ACTION_GROUPS:
+            outputs = [(o, label) for o, label in actions if o in CONTROLLER_OUTPUTS]
+            if not outputs:
+                continue
+            ttk.Label(table, text=_(group, group_ru), style='Section.TLabel').grid(
+                row=table.grid_size()[1], column=0, columnspan=3, sticky='w', pady=(14, 4))
+            for output, (label, label_ru) in outputs:
+                r = table.grid_size()[1]
+                ttk.Label(table, text=_(label, label_ru)).grid(row=r, column=0, sticky='w', padx=(0, 18), pady=2)
+                btn = ttk.Button(table, style='Slot.TButton', command=lambda o=output: self.start_controller_capture(o))
+                btn.grid(row=r, column=1, sticky='ew', padx=2, pady=2)
+                btn.bind('<Button-3>', lambda _e, o=output: self.set_controller(o, DEFAULT_CONTROLLER.get(o)))
+                warn = ttk.Label(table, style='Muted.TLabel')
+                warn.grid(row=r, column=2, sticky='w', padx=(8, 0))
+                self.controller_rows[output] = (btn, warn)
+        reset = ttk.Frame(f)
+        ttk.Button(reset, text=_('Reset controller buttons', 'Сбросить кнопки геймпада'),
+                   command=lambda: [self.set_controller(o, DEFAULT_CONTROLLER.get(o)) for o in CONTROLLER_OUTPUTS]
+                   ).pack(side='left')
+        self.row(f, '', reset)
+        self.refresh_controller_rows()
+
+    def current_controller(self, output):
+        return self.controller_edits.get(output, self.controller_bindings.get(output))
+
+    def refresh_controller_rows(self):
+        current = {o: self.current_controller(o) for o in self.controller_rows}
+        conflicts = controller_conflicts(current)
+        for output, (btn, warn) in self.controller_rows.items():
+            name = current[output]
+            text = controller_display_name(name, LANG == 'ru') if name else '—'
+            btn.configure(text=text + ('  ⚠' if output in conflicts else ''), style='Slot.TButton')
+            others = conflicts.get(output, [])
+            warn.configure(text='⚠ ' + _('also {}', 'также {}').format(
+                ', '.join(_(*OUTPUT_LABELS[o]) for o in others)) if others else '')
+
+    def set_controller(self, output, name):
+        if self.controller_listening:
+            return
+        self.controller_edits[output] = name
+        self.refresh_controller_rows()
+
+    def start_controller_capture(self, output):
+        """Waits for a controller button (read through the game's SDL3, bbport_gamepad) and binds
+        it to `output`. Buttons already held when it starts count only once released and pressed
+        again. Esc, or 10 seconds without a press, cancels."""
+        if self.controller_listening:
+            return
+        if self.pads is None:
+            self.pads = bbport_gamepad.Pads(PORT_DIR)
+        if not self.pads.connected():
+            self.messagebox.showwarning(
+                _('Controller', 'Геймпад'),
+                _('No controller found. Connect one, then click the slot again.',
+                  'Геймпад не найден. Подключите его и снова щёлкните ячейку.') +
+                (f'\n\n{self.pads.problem}' if self.pads.problem else ''))
+            return
+        self.controller_listening = True
+        btn = self.controller_rows[output][0]
+        for other, _warn in self.controller_rows.values():
+            other.state(['disabled'])
+        btn.configure(text=_('Press a button…', 'Нажмите кнопку…'), style='Listen.TButton')
+        ignored = set(self.pads.pressed())
+        deadline = time.monotonic() + 10
+
+        def finish(name=None):
+            self.root.unbind_all('<KeyPress-Escape>')
+            for other, _warn in self.controller_rows.values():
+                other.state(['!disabled'])
+            self.controller_listening = False
+            if name:
+                self.controller_edits[output] = name
+            self.refresh_controller_rows()
+
+        def poll():
+            if not self.controller_listening:
+                return
+            held = self.pads.pressed()
+            ignored.intersection_update(held)  # released: counts again
+            new = sorted(held - ignored)
+            if new:
+                finish(new[0])
+            elif time.monotonic() > deadline:
+                finish()
+            else:
+                self.root.after(15, poll)
+        self.root.bind_all('<KeyPress-Escape>', lambda _e: finish())
+        self.root.after(15, poll)
 
     def apply_layout_preset(self):
         """Writes the Dark Souls III layout into input.ini now (bbport_input_config.apply_layout)
@@ -2104,6 +2215,12 @@ class Launcher:
             self.remap_edits = {}
             if getattr(self, 'remap_rows', None):
                 self.refresh_remap_row(None)  # emptied slots close up, as the file has them
+        if self.controller_edits:
+            save_controller_bindings(self.remap_ini_path, self.controller_edits, self.remap_lines)
+            self.remap_bindings, self.remap_lines, self.remap_toggle_key, self.remap_reload_key, \
+                self.mouse_settings = load_input_ini(self.remap_ini_path)
+            self.controller_bindings = load_controller_bindings(self.remap_lines)
+            self.controller_edits = {}
         if self.mouse_edited:
             save_mouse_settings(self.remap_ini_path, self.mouse_settings, self.remap_lines)
             self.remap_bindings, self.remap_lines, self.remap_toggle_key, self.remap_reload_key, \

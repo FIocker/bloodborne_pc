@@ -22,6 +22,34 @@ def game_default_text():
 
 
 class InputDefaultsTests(unittest.TestCase):
+    def test_controller_bindings_round_trip(self):
+        lines = config.DEFAULT_INPUT_INI.splitlines()
+        loaded = config.load_controller_bindings(lines)
+        self.assertEqual(loaded, config.DEFAULT_CONTROLLER)
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'input.ini'
+            # Cross and Circle swapped, R1 unbound, the touchpad's right click on a paddle.
+            config.save_controller_bindings(path, {'cross': 'circle', 'circle': 'cross', 'r1': None,
+                                                   'touchpad_right': 'r4'}, lines)
+            text = path.read_text(encoding='utf-8')
+            saved = text.splitlines()
+            self.assertIn('cross = circle', saved)
+            self.assertIn('circle = cross', saved)
+            self.assertNotIn('r1 = r1', saved)
+            self.assertIn('touchpad_right = r4', saved)
+            # Keyboard lines and the sticks' controller lines are untouched.
+            self.assertIn('axis_left_x = axis_left_x', saved)
+            keyboard, _lines, *_rest = config.load_input_ini(path)
+            self.assertEqual(keyboard, config.load_input_ini(Path(temp) / 'missing.ini')[0])
+            again = config.load_controller_bindings(saved)
+            self.assertEqual(again, {**config.DEFAULT_CONTROLLER, 'cross': 'circle', 'circle': 'cross',
+                                     'r1': None, 'touchpad_right': 'r4'})
+            # The new line goes with the controller lines, not after the hotkeys.
+            self.assertLess(saved.index('touchpad_right = r4'), saved.index('# Hotkeys'))
+        self.assertEqual(config.load_controller_bindings(['cross = share', 'l1 = lpaddle_high'])['cross'], 'back')
+        self.assertEqual(config.controller_conflicts({'cross': 'circle', 'circle': 'circle', 'r1': 'r1'}),
+                         {'cross': ['circle'], 'circle': ['cross']})
+
     def test_launcher_default_matches_the_game(self):
         self.assertEqual(config.DEFAULT_INPUT_INI, game_default_text())
 
