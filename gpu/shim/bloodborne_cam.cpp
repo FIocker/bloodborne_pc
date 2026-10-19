@@ -389,6 +389,12 @@ static void AddFloat(std::atomic<float>& value, float add) {
     }
 }
 
+bool BloodborneCam::IsLockedOn() const noexcept {
+    if (m_lockedOn.load(std::memory_order_relaxed)) return true;
+    const int64_t last = m_lastApplyMs.load(std::memory_order_relaxed);
+    return m_enabled.load(std::memory_order_relaxed) && last && NowMs() - last > 100;
+}
+
 void BloodborneCam::OnMouseMotion(float xrel, float yrel) {
     if (!m_enabled.load(std::memory_order_acquire) || !m_trampoline) {
         return;

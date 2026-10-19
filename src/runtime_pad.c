@@ -466,6 +466,7 @@ static int lock_switch_flick(float dx, float dy, double dt_ms, int threshold, in
         const int horizontal=fabs(lock_switch_x)>=fabs(lock_switch_y);
         lock_flick_x=horizontal ? (lock_switch_x<0 ? -127 : 127) : 0;
         lock_flick_y=horizontal ? 0 : (lock_switch_y<0 ? -127 : 127);
+        printf("Mouse: lock-on switch %s\n",lock_flick_x<0 ? "left" : lock_flick_x>0 ? "right" : lock_flick_y<0 ? "up" : "down");
         lock_flick_until_us=now+100000;
         lock_flick_ready_us=now+350000;
         lock_switch_x=lock_switch_y=0.0;
@@ -672,6 +673,11 @@ static void sample_host(PadData *d) {
         last_mouse_sample_us=now;
         const float sx=mouse.dx*input_mouse_scale_x(&cfg->mouse), sy=mouse.dy*input_mouse_scale_y(&cfg->mouse);
         int mx=0, my=0;
+        static int was_locked=-1;
+        if (mouse.locked_on!=was_locked) {
+            if (was_locked>=0) printf("Mouse: lock-on %s\n",mouse.locked_on ? "seen: mouse motion switches targets" : "ended");
+            was_locked=mouse.locked_on;
+        }
         if (mouse.locked_on && cfg->mouse.lock_switch>0) {
             /* The right stick switches targets; the stick's smoothing starts fresh afterwards. */
             smoothed_mouse_stick_x=smoothed_mouse_stick_y=0.0;

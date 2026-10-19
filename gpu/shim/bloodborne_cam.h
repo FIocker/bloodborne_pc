@@ -39,10 +39,10 @@ public:
     [[nodiscard]] bool IsEnabled() const noexcept {
         return m_enabled.load(std::memory_order_acquire);
     }
-    /// True while the game reports a lock-on target (motion is not applied then).
-    [[nodiscard]] bool IsLockedOn() const noexcept {
-        return m_lockedOn.load(std::memory_order_relaxed);
-    }
+    /// True while the game reports a lock-on target (motion is not applied then), or while the
+    /// hooked camera update has not run for 100 ms: the game may drive a locked-on camera
+    /// without it, which left the flag at its last value and mouse motion went nowhere.
+    [[nodiscard]] bool IsLockedOn() const noexcept;
 
     /// Mouse sampler thread: gathers relative motion for the next camera update.
     void OnMouseMotion(float xrel, float yrel);
