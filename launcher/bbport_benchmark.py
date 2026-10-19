@@ -37,6 +37,7 @@ ROUTE = [
     ('walk back', 8, 'ly=255', 3),
 ]
 SUMMARY_PHASES = ['idle', 'pan', 'walk']  # 'walk back' counts with 'walk'
+SCENE_DRAWS = 500  # draws a frame from which the start area is on screen
 
 
 class Cancelled(Exception):
@@ -93,6 +94,7 @@ class Run:
         self.process = None
         self.title_seen = threading.Event()
         self.world_seen = threading.Event()
+        self.scene_seen = threading.Event()  # frame stats with the area's draws, not a loading screen
         self.exited = threading.Event()
         self.mounts = 0  # read-only save mounts: the title, then the main menu reading the saves
 
@@ -194,8 +196,14 @@ class Run:
             if self.world_seen.is_set():
                 break
         self.wait_for(self.world_seen, 1, 'The game world')
+        # A fixed 30 s from the load's start was still the loading screen on a Xeon E3-1230 V2
+        # with a cold shader cache, and its idle phase measured that. Wait for the area itself
+        # (Cathedral Ward draws ~1400 a frame, loading screens 5-150), then let it settle.
         self.progress('Waiting for the area to load…')
-        self.wait(30)
+        deadline = time.monotonic() + 240
+        while not self.scene_seen.is_set() and time.monotonic() < deadline:
+            self.wait(0.5)
+        self.wait(15 if self.scene_seen.is_set() else 0)
 
         if route.is_file():
             self.mark('route')
@@ -237,6 +245,9 @@ class Run:
                 self.title_seen.set()
             if "guest thread 'CSChrThread0' created" in text:
                 self.world_seen.set()
+            draws = re.search(r'(\d+) draws/frame', text) if text.startswith('Frame stats:') else None
+            if draws and self.world_seen.is_set() and int(draws.group(1)) >= SCENE_DRAWS:
+                self.scene_seen.set()
         self.exited.set()
 
     def stop(self):
