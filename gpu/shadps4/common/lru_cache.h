@@ -1,114 +1,135 @@
-// SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 
-#include <concepts>
+#include <deque>
 #include <type_traits>
+
 #include "common/types.h"
 
 namespace Common {
 
-template <typename TickType = u64>
-struct LRUNode {
-    LRUNode* prev{};
-    LRUNode* next{};
-    TickType tick{};
-    bool linked{};
-};
-
-template <typename ObjectType, typename TickType = u64>
-    requires std::derived_from<ObjectType, LRUNode<TickType>>
-class LRUCache {
-    using Node = LRUNode<TickType>;
-
-    static Node& FromObject(ObjectType& object) {
-        return static_cast<Node&>(object);
-    }
-
-    static ObjectType& ToObject(Node& node) {
-        return static_cast<ObjectType&>(node);
-    }
+template <typename ObjectType, typename TickType>
+class LeastRecentlyUsedCache {
+    struct Item {
+        ObjectType obj;
+        TickType tick;
+        Item* next{};
+        Item* prev{};
+    };
 
 public:
-    void Insert(ObjectType& obj, TickType tick) {
-        Node& node = FromObject(obj);
-        node.tick = tick;
-        Attach(node);
+    LeastRecentlyUsedCache() : first_item{}, last_item{} {}
+    ~LeastRecentlyUsedCache() = default;
+
+    size_t Insert(ObjectType obj, TickType tick) {
+        const auto new_id = Build();
+        auto& item = item_pool[new_id];
+        item.obj = obj;
+        item.tick = tick;
+        Attach(item);
+        return new_id;
     }
 
-    void Touch(ObjectType& obj, TickType tick) {
-        Node& node = FromObject(obj);
-        if (node.tick >= tick) {
+    void Touch(size_t id, TickType tick) {
+        auto& item = item_pool[id];
+        if (item.tick >= tick) {
             return;
         }
-        node.tick = tick;
-        if (&node == last) {
+        item.tick = tick;
+        if (&item == last_item) {
             return;
         }
-        Detach(node);
-        Attach(node);
+        Detach(item);
+        Attach(item);
     }
 
-    void Free(ObjectType& obj) {
-        Node& node = FromObject(obj);
-        if (node.linked) {
-            Detach(node);
-        }
+    void Free(size_t id) {
+        auto& item = item_pool[id];
+        Detach(item);
+        item.prev = nullptr;
+        item.next = nullptr;
+        free_items.push_back(id);
     }
 
     template <typename Func>
     void ForEachItemBelow(TickType tick, Func&& func) {
         static constexpr bool RETURNS_BOOL =
-            std::is_same_v<std::invoke_result_t<Func, ObjectType&>, bool>; // bbport: lvalue, as called
-        Node* it = first;
-        while (it) {
-            if (static_cast<s64>(tick) - static_cast<s64>(it->tick) < 0) {
+            std::is_same_v<std::invoke_result_t<Func, ObjectType>, bool>;
+        Item* iterator = first_item;
+        while (iterator) {
+            if (static_cast<s64>(tick) - static_cast<s64>(iterator->tick) < 0) {
                 return;
             }
-            Node* next = it->next;
-            auto& obj = ToObject(*it);
+            Item* next = iterator->next;
             if constexpr (RETURNS_BOOL) {
-                if (func(obj)) {
+                if (func(iterator->obj)) {
                     return;
                 }
             } else {
-                func(obj);
+                func(iterator->obj);
             }
-            it = next;
+            iterator = next;
         }
     }
 
 private:
-    void Attach(Node& node) {
-        node.prev = last;
-        node.next = nullptr;
-        if (last) {
-            last->next = &node;
-        } else {
-            first = &node;
+    size_t Build() {
+        if (free_items.empty()) {
+            const size_t item_id = item_pool.size();
+            auto& item = item_pool.emplace_back();
+            item.next = nullptr;
+            item.prev = nullptr;
+            return item_id;
         }
-        last = &node;
-        node.linked = true;
+        const size_t item_id = free_items.front();
+        free_items.pop_front();
+        auto& item = item_pool[item_id];
+        item.next = nullptr;
+        item.prev = nullptr;
+        return item_id;
     }
 
-    void Detach(Node& node) {
-        if (node.prev) {
-            node.prev->next = node.next;
-        } else {
-            first = node.next;
+    void Attach(Item& item) {
+        if (!first_item) {
+            first_item = &item;
         }
-        if (node.next) {
-            node.next->prev = node.prev;
+        if (!last_item) {
+            last_item = &item;
         } else {
-            last = node.prev;
+            item.prev = last_item;
+            last_item->next = &item;
+            item.next = nullptr;
+            last_item = &item;
         }
-        node.prev = node.next = nullptr;
-        node.linked = false;
     }
 
-    Node* first{};
-    Node* last{};
+    void Detach(Item& item) {
+        if (item.prev) {
+            item.prev->next = item.next;
+        }
+        if (item.next) {
+            item.next->prev = item.prev;
+        }
+        if (&item == first_item) {
+            first_item = item.next;
+            if (first_item) {
+                first_item->prev = nullptr;
+            }
+        }
+        if (&item == last_item) {
+            last_item = item.prev;
+            if (last_item) {
+                last_item->next = nullptr;
+            }
+        }
+    }
+
+    std::deque<Item> item_pool;
+    std::deque<size_t> free_items;
+    Item* first_item{};
+    Item* last_item{};
 };
 
 } // namespace Common

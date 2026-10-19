@@ -4,7 +4,6 @@
 #include "bbport_toggles.h"
 #include <atomic>
 #include <ranges>
-#include <memory>
 #include "common/assert.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -38,10 +37,8 @@ static vk::ImageUsageFlags ImageUsageFlags(const Vulkan::Instance& instance,
             }
             // Always create images with storage flag to avoid needing re-creation in case of e.g
             // compute clears This sacrifices a bit of performance but is less work. ExtendedUsage
-            // flag is also used. The exception here is for multisample images when storage is not
-            // supported, where even with ExtendedUsage we may get only one supported sample back.
-            if (info.num_samples == 1 || instance.IsMultisampleStorageImageSupported())
-                usage |= vk::ImageUsageFlagBits::eStorage;
+            // flag is also used.
+            usage |= vk::ImageUsageFlagBits::eStorage;
         }
     } else {
         // Similarly to above, we specify storage usage. This is typically not supported by
@@ -57,10 +54,10 @@ static vk::ImageType ConvertImageType(AmdGpu::ImageType type) noexcept {
     switch (type) {
     case AmdGpu::ImageType::Color1D:
     case AmdGpu::ImageType::Color1DArray:
+        return vk::ImageType::e1D;
     case AmdGpu::ImageType::Color2D:
     case AmdGpu::ImageType::Color2DMsaa:
     case AmdGpu::ImageType::Color2DArray:
-    case AmdGpu::ImageType::Cube:
         return vk::ImageType::e2D;
     case AmdGpu::ImageType::Color3D:
         return vk::ImageType::e3D;
@@ -232,6 +229,7 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
     }
 
     image_uid = global_image_uid.Next();
+    mip_hashes.resize(info.resources.levels);
     vk::ImageCreateFlags flags{vk::ImageCreateFlagBits::eMutableFormat |
                                vk::ImageCreateFlagBits::eExtendedUsage};
     if (info.props.is_volume) {
@@ -355,7 +353,7 @@ ImageView& Image::FindView(const ImageViewInfo& view_info, bool ensure_guest_sam
         const auto view_id = backing->image_view_ids[backing->last_view];
         return (*slot_image_views)[view_id];
     }
-    const auto view_id = slot_image_views->Insert(runtime->GetInstance(), view_info, *this);
+    const auto view_id = slot_image_views->insert(runtime->GetInstance(), view_info, *this);
     backing->image_view_infos.emplace_back(view_info);
     backing->image_view_ids.emplace_back(view_id);
     return (*slot_image_views)[view_id];
@@ -381,16 +379,19 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
         // In case of partial transition, we need to change the specified subresources only.
         // Otherwise all subresources need to be set to the same state so we can use a full
         // resource transition for the next time.
-        const u32 start_mip = needs_partial_transition ? subres_range->base.level : u16{0};
-        const u32 end_mip = needs_partial_transition
-                                ? subres_range->base.level + subres_range->extent.levels
-                                : info.resources.levels;
-        const u32 start_layer = needs_partial_transition ? subres_range->base.layer : u16{0};
-        const u32 end_layer = needs_partial_transition
-                                  ? subres_range->base.layer + subres_range->extent.layers
-                                  : info.resources.layers;
-        for (u32 mip = start_mip; mip < end_mip; ++mip) {
-            for (u32 layer = start_layer; layer < end_layer; ++layer) {
+        const auto mips =
+            needs_partial_transition
+                ? std::ranges::views::iota(subres_range->base.level,
+                                           subres_range->base.level + subres_range->extent.levels)
+                : std::views::iota(0u, info.resources.levels);
+        const auto layers =
+            needs_partial_transition
+                ? std::ranges::views::iota(subres_range->base.layer,
+                                           subres_range->base.layer + subres_range->extent.layers)
+                : std::views::iota(0u, info.resources.layers);
+
+        for (u32 mip : mips) {
+            for (u32 layer : layers) {
                 // NOTE: these loops may produce a lot of small barriers.
                 // If this becomes a problem, we can optimize it by merging adjacent barriers.
                 const auto subres_idx = mip * info.resources.layers + layer;
@@ -438,6 +439,7 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
         if (last_state.layout == dst_layout && last_state.access_mask == dst_mask && !is_write) {
             return;
         }
+
         barriers.emplace_back(vk::ImageMemoryBarrier2{
             .srcStageMask = last_state.pl_stage,
             .srcAccessMask = last_state.access_mask,

@@ -330,7 +330,6 @@ bool Instance::CreateDevice() {
 
     // Optional
     maintenance_5 = add_extension(VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
-    maintenance_6 = add_extension(VK_KHR_MAINTENANCE_6_EXTENSION_NAME);
     // bbport: after a device loss the driver says where the GPU faulted (ReportDeviceLost).
     device_fault = feature_chain.get<vk::PhysicalDeviceFaultFeaturesEXT>().deviceFault &&
                    add_extension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
@@ -356,10 +355,7 @@ bool Instance::CreateDevice() {
     depth_clip_control = add_extension(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME);
     depth_clip_enable = add_extension(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME);
     vertex_input_dynamic_state = add_extension(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
-    // Games excessively leave restart enabled with lists when it isn't actually needed, and it
-    // slows down KosmicKrisp due to unrolling. Revisit if KosmicKrisp moves this to mesh shaders.
-    list_restart = driver_id != vk::DriverId::eMesaKosmickrisp &&
-                   add_extension(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
+    list_restart = add_extension(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
     if (list_restart) {
         list_restart_features =
             feature_chain.get<vk::PhysicalDevicePrimitiveTopologyListRestartFeaturesEXT>();
@@ -589,9 +585,6 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceMaintenance5FeaturesKHR{
             .maintenance5 = true,
         },
-        vk::PhysicalDeviceMaintenance6FeaturesKHR{
-            .maintenance6 = true,
-        },
         vk::PhysicalDeviceFaultFeaturesEXT{
             .deviceFault = true,
         },
@@ -666,9 +659,6 @@ bool Instance::CreateDevice() {
     }
     if (!maintenance_5) {
         device_chain.unlink<vk::PhysicalDeviceMaintenance5FeaturesKHR>();
-    }
-    if (!maintenance_6) {
-        device_chain.unlink<vk::PhysicalDeviceMaintenance6FeaturesKHR>();
     }
     if (!device_fault) {
         device_chain.unlink<vk::PhysicalDeviceFaultFeaturesEXT>();
@@ -869,7 +859,7 @@ void Instance::CollectPhysicalMemoryInfo() {
     // Leave at least 8 GB for the system on integrated GPUs.
     const s64 available_memory = static_cast<s64>(total_memory_budget - device_initial_usage);
     total_memory_budget =
-        static_cast<u64>(std::max<s64>(available_memory - 8_GB, static_cast<s64>(2_GB)));
+        static_cast<u64>(std::max<s64>(available_memory - 8_GB, static_cast<s64>(local_memory)));
 }
 
 void Instance::CollectImageFormatInfo() {

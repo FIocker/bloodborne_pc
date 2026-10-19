@@ -6,7 +6,6 @@
 #include <ctime>
 #include <string>
 #include <thread>
-#include <fmt/format.h>
 
 
 #include "common/error.h"

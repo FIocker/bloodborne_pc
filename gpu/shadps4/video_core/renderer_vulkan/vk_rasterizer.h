@@ -38,10 +38,6 @@ public:
                         AmdGpu::Liverpool* liverpool);
     ~Rasterizer();
 
-    [[nodiscard]] Scheduler& GetScheduler() noexcept {
-        return scheduler;
-    }
-
     [[nodiscard]] Runtime& GetRuntime() noexcept {
         return runtime;
     }
@@ -139,6 +135,7 @@ public:
     /// A guest write hit a protected page.
     bool OnWriteFault(VAddr addr, bool assume_locks);
     bool ReadMemory(VAddr addr, u64 size, bool assume_locks = false);
+    void ProcessDownloadImages();
     bool IsMapped(VAddr addr, u64 size);
     void MapMemory(VAddr addr, u64 size);
     void RegisterMemory(VAddr addr, u64 size);
@@ -147,8 +144,6 @@ public:
     u64 Flush();
     void Finish();
     void OnSubmit();
-    /// A guest-visible fence or CPU write: pending image downloads land first.
-    void OnFence();
 
     PipelineCache& GetPipelineCache() {
         return pipeline_cache;
@@ -302,12 +297,12 @@ private:
     bool SkipOutputlessDraw(const GraphicsPipeline* pipeline);
     void BindVertexBuffers(const GraphicsPipeline* pipeline,
                            const PreparedDraw* prepared = nullptr);
-    void BindIndexBuffer(u32 index_offset = 0, bool is_indirect = false);
+    void BindIndexBuffer(u32 index_offset = 0);
     /// bbport: BindVertexBuffers/BindIndexBuffer in two halves: obtaining the buffers
     /// (vertex_binds, index_bind) and recording the binds.
     void ResolveVertexBuffers(const GraphicsPipeline* pipeline, const PreparedDraw* prepared);
     void EmitVertexBuffers();
-    void ResolveIndexBuffer(u32 index_offset, bool is_indirect = false);
+    void ResolveIndexBuffer(u32 index_offset);
     void EmitIndexBuffer();
 
     void ResetBindings(bool is_compute);
@@ -354,10 +349,9 @@ private:
         const VideoCore::Buffer* buffer;
         u64 offset;
         u32 size;
-        vk::AccessFlags2 src_access;
+        bool is_written;
     };
-    /// Shader, vertex, index and indirect buffers of the current draw (barrier tracking).
-    std::vector<BoundBuffer> bound_buffers;
+    boost::container::static_vector<BoundBuffer, Shader::NUM_BUFFERS> bound_buffers;
 
     u32 set_write_index{};
     Pipeline::DescriptorWrites set_writes;
@@ -439,7 +433,6 @@ private:
     struct IndexBind {
         vk::Buffer handle;
         u64 offset;
-        vk::DeviceSize size;
         vk::IndexType type;
     } index_bind{};
     /// The direct draw whose vertex/index buffers BindResources may resolve early.
@@ -470,6 +463,7 @@ private:
     u64 helper_full = 0, helper_partial = 0, helper_serial = 0;
     /// The memoized cache entry of each image binding (FindImage memo taken), else null.
     boost::container::static_vector<ImageDescCacheEntry*, Shader::NUM_IMAGES> image_binding_entries;
+    bool fault_process_pending{};
     bool attachment_feedback_loop{};
     bool needs_barrier{};
     // bbport: two-stage draw pipeline (stage B state; the thread is the last member so it

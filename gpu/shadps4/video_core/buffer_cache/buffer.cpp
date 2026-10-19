@@ -87,7 +87,7 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
     if (mem_type != MemoryType::Sparse) {
         const VmaAllocationCreateFlags bda_flag =
             with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;
-        VmaAllocationCreateInfo alloc_ci = {
+        const VmaAllocationCreateInfo alloc_ci = {
             .flags =
                 VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT | bda_flag | MemoryUsageVmaFlags(mem_type),
             .usage = MemoryUsageVma(mem_type),
@@ -146,6 +146,11 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
         Vulkan::SetObjectName(device, Handle(), debug_name);
     } else {
         Vulkan::SetObjectName(device, Handle(), "Buffer {:#x}:{:#x}", cpu_addr, size_bytes);
+    }
+    // bbport: the name in the allocator's statistics (BB_VMA_DUMP), for VRAM by purpose.
+    if (buffer.allocation) {
+        const std::string name{debug_name.empty() ? std::string_view{"Buffer"} : debug_name};
+        vmaSetAllocationName(instance.GetAllocator(), buffer.allocation, name.c_str());
     }
 
     if (mem_type != MemoryType::Sparse) {

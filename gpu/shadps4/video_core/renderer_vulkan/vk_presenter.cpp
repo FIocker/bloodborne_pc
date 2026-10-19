@@ -511,7 +511,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     VideoCore::ImageViewInfo view_info{};
     view_info.format = GetFrameViewFormat(attribute.attrib.pixel_format);
     // Exclude alpha from output frame to avoid blending with UI.
-    view_info.mapping.a = AmdGpu::CompSwizzle::One;
+    view_info.mapping.a = vk::ComponentSwizzle::eOne;
 
     vk::ImageView image_view{};
     vk::Extent2D image_size{};

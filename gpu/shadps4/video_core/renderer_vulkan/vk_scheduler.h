@@ -25,7 +25,6 @@
 #include "video_core/amdgpu/regs_primitive.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
-#include "vulkan/vulkan.hpp"
 
 namespace tracy {
 class VkCtxScope;
