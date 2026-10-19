@@ -138,6 +138,7 @@ from bbport_input_config import (STICK_OUTPUTS, OUTPUT_LABELS, ACTION_GROUPS, SL
                                   controller_conflicts, controller_display_name,
                                   load_controller_bindings, save_controller_bindings)  # noqa: E402
 import bbport_gamepad  # noqa: E402
+import bbport_respec as respec  # noqa: E402
 
 LANG = 'en'
 
@@ -1127,6 +1128,98 @@ class Launcher:
         control, camera = self.var('cheat_enemy_control', 'ini'), self.var('debug_camera', 'ini')
         control.trace_add('write', lambda *_a: control.get() and camera.set(False))
         camera.trace_add('write', lambda *_a: camera.get() and control.set(False))
+        self.section(f, _('Respec', 'Перераспределение'))
+        holder = self.ttk.Frame(f)
+        self.ttk.Button(holder, text=_('Respec a character…', 'Перераспределить характеристики…'),
+                        command=self.open_respec).pack(side='left')
+        self.row(f, '', holder,
+                 _('Spread a character\'s attribute points again: same level, same Blood Echoes. '
+                   'Changes the save while the game is closed; a copy of the saves is kept in '
+                   'respec-backups beside them.',
+                   'Заново распределить очки характеристик персонажа: тот же уровень и Отголоски '
+                   'крови. Меняет сохранение, пока игра закрыта; копия сохранений остаётся в '
+                   'respec-backups рядом с ними.'))
+
+    def open_respec(self):
+        """The respec dialog (bbport_respec): a character, its six attributes, Apply."""
+        tk, ttk = self.tk, self.ttk
+        title = _('Respec', 'Перераспределение')
+        if self.process:
+            self.messagebox.showinfo(title, _('Close the game first: it would save over the change.',
+                                              'Сначала закройте игру: она запишет сохранение поверх.'))
+            return
+        user = Path(self.var('user_dir', 'app').get() or DATA_DIR / 'user')
+        found = [(folder, slot, who) for folder in respec.save_folders(user)
+                 for slot, who in respec.characters(folder)]
+        if not found:
+            self.messagebox.showinfo(title, _('No characters found in {}.', 'Персонажи не найдены в {}.').format(user))
+            return
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.configure(bg=PANEL)
+        win.transient(self.root)
+        win.resizable(False, False)
+        body = ttk.Frame(win, padding=16)
+        body.pack(fill='both', expand=True)
+        labels = [_('Slot {}: {} (level {})', 'Ячейка {}: {} (уровень {})').format(slot + 1, who['name'] or '—', who['level'])
+                  for _folder, slot, who in found]
+        chosen = tk.StringVar(value=labels[0])
+        ttk.Combobox(body, textvariable=chosen, values=labels, state='readonly', width=36).grid(
+            row=0, column=0, columnspan=2, sticky='w', pady=(0, 10))
+        names = {'vitality': _('Vitality', 'Живучесть'), 'endurance': _('Endurance', 'Выносливость'),
+                 'strength': _('Strength', 'Сила'), 'skill': _('Skill', 'Ловкость'),
+                 'bloodtinge': _('Bloodtinge', 'Кровь'), 'arcane': _('Arcane', 'Тайна')}
+        values = {a: tk.IntVar() for a in respec.ATTRIBUTES}
+        for row, a in enumerate(respec.ATTRIBUTES, start=1):
+            ttk.Label(body, text=names[a]).grid(row=row, column=0, sticky='w', padx=(0, 16), pady=2)
+            ttk.Spinbox(body, from_=respec.FLOORS[a], to=respec.MAX, textvariable=values[a], width=6).grid(
+                row=row, column=1, sticky='w', pady=2)
+        left = ttk.Label(body, style='Muted.TLabel')
+        left.grid(row=8, column=0, columnspan=2, sticky='w', pady=(10, 0))
+        buttons = ttk.Frame(body)
+        buttons.grid(row=9, column=0, columnspan=2, sticky='e', pady=(12, 0))
+
+        def current():
+            return found[labels.index(chosen.get())]
+
+        def load(*_a):
+            for a in respec.ATTRIBUTES:
+                values[a].set(current()[2]['attributes'][a])
+
+        def points(*_a):
+            try:
+                spent = sum(values[a].get() for a in respec.ATTRIBUTES)
+            except tk.TclError:
+                left.configure(text='')
+                return
+            remaining = sum(current()[2]['attributes'].values()) - spent
+            left.configure(text=_('Points to place: {}', 'Осталось распределить: {}').format(remaining) if remaining >= 0
+                           else _('{} points too many', 'Лишних очков: {}').format(-remaining))
+            apply.state(['!disabled'] if remaining == 0 else ['disabled'])
+
+        def save():
+            folder, slot, who = current()
+            try:
+                new = {a: values[a].get() for a in respec.ATTRIBUTES}
+                backup = respec.respec(folder, slot, new)
+            except (ValueError, OSError, tk.TclError) as error:
+                self.messagebox.showerror(title, str(error), parent=win)
+                return
+            who['attributes'] = new
+            self.messagebox.showinfo(title, _('Done. A copy of the saves from before is in {}.',
+                                              'Готово. Копия прежних сохранений: {}.').format(backup.parent),
+                                     parent=win)
+            win.destroy()
+
+        ttk.Button(buttons, text=_('Reset', 'Сбросить'), command=load).pack(side='left', padx=(0, 8))
+        apply = ttk.Button(buttons, text=_('Apply', 'Применить'), command=save)
+        apply.pack(side='left')
+        chosen.trace_add('write', load)
+        for var in values.values():
+            var.trace_add('write', points)
+        load()
+        points()
+        win.grab_set()
 
     def build_online(self):
         ttk = self.ttk
