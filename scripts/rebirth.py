@@ -12,8 +12,9 @@ Three parts:
   a call to the port), then the level-up screen on success or a message when Insight is short.
 - The game's event flag setter: setting REQUEST calls the port ("bb:b") and sets RESULT to its
   answer instead. Every other flag is set as before.
-- The level-up screen's pricing: raising or lowering an attribute asks the port ("bb:f" with the
-  level) whether that level is free, and adds or takes off 0 Blood Echoes if so.
+- The level-up screen's pricing: its total, the check that the next level can be paid and the
+  price it shows ask the port ("bb:f" with the level) whether that level is free, and count 0
+  Blood Echoes if so.
 `code_writes` gives the eboot patches; `main` writes the talk script and texts as a mod layer
 (the menu texts on top of --source, Quit to Desktop's layer, which edits the same archive).
 """
@@ -40,13 +41,22 @@ OPTION = 4                   # the talk list's result for Rebirth (1-3 are the D
 BROWSER = quit_menu.BROWSER
 SET_FLAG = 0x13CFCC0         # SetEventFlag(EventFlagMan*, flag, value)
 SET_FLAG_RESUME = 0x13CFCC8  # after the instructions the jump replaces
-RAISE = 0x169CA2D            # level-up screen, an attribute raised: price -> rax
+RAISE = 0x169CA2D            # an older level-up screen: an attribute raised: price -> rax
 LOWER = 0x169CA93            # an attribute lowered: price taken off
+# The level-up screen the Doll opens (r12/r13: the screen; ebx = the priced level + 0x51):
+TOTAL = 0x1B2E5C0            # the total cost, level by level: price -> rax, added to +0xEB0
+AFFORD = 0x1B2F6DC           # can the next level be paid: price -> rcx, compared with eax
+SHOWN = 0x1B2F9AA            # the next level's price shown -> r14
+SHOWN_RED = 0x1B2FA51        # the same, to show it red when short -> rax
 CAVE = 0x50D9900             # past Quit to Desktop's code in the code segment's last page
 ORIGINAL = {
     SET_FLAG: '4189d0 8b4f1c 31d2',
     RAISE: 'c4e1fa2cc0 8b8bf8010000',
     LOWER: 'c4e1fa2cc0 2983f4010000',
+    TOTAL: 'c4e1fa2cc0 41018424b00e0000',
+    AFFORD: 'c4e1fa2cc8 39c1',
+    SHOWN: 'c461fa2cf0',
+    SHOWN_RED: 'c4e1fa2cc0',
 }
 
 TEXTS = {
@@ -104,6 +114,33 @@ def code_writes():
         return at
     raise_price = price('83ee51', '8b8bf8010000')      # sub esi, 0x51 | mov ecx, [rbx+0x1f8]
     lower_price = price('83ee51', '2983f4010000')      # sub esi, 0x51 | sub [rbx+0x1f4], eax
+
+    # is_free: esi = a level; eax = 1 when the port gives it free. Any stack alignment; every
+    # register but rax and the flags (and the vector registers) is kept.
+    is_free = cave.here
+    cave.raw('55 4889e5 4883e4f0'.replace(' ', ''))          # push rbp; mov rbp, rsp; and rsp, -16
+    cave.raw('51 52 56 57 4150 4151 4152 4153'.replace(' ', ''))  # push rcx rdx rsi rdi r8-r11
+    cave.messages.append((len(cave.data), 1))
+    cave.raw('488d3d00000000')                               # lea rdi, [rip + "bb:f"]
+    cave.call(BROWSER)
+    cave.raw('415b 415a 4159 4158 5f 5e 5a 59'.replace(' ', ''))  # pop r11-r8 rdi rsi rdx rcx
+    cave.raw('4889ec 5d c3'.replace(' ', ''))                # mov rsp, rbp; pop rbp; ret
+
+    def screen_price(convert, zero, tail=''):
+        # The replaced conversion, then the price (in the register `zero` clears) is 0 when the
+        # level ebx - 0x51 is free; `tail` is the instruction the call also replaced.
+        at = cave.here
+        cave.raw(convert)
+        cave.raw('50 89de 83ee51'.replace(' ', ''))           # push rax; mov esi, ebx; sub esi, 0x51
+        cave.call(is_free)
+        cave.raw('85c0 58'.replace(' ', ''))                   # test eax, eax; pop rax
+        cave.raw('74' + format(len(bytes.fromhex(zero)), '02x') + zero)  # jz +n; zero
+        cave.raw(tail + 'c3')
+        return at
+    total_price = screen_price('c4e1fa2cc0', '31c0', '41018424b00e0000')  # add [r12+0xeb0], eax
+    afford_price = screen_price('c4e1fa2cc8', '31c9', '39c1')             # cmp ecx, eax
+    shown_price = screen_price('c461fa2cf0', '4531f6')                    # xor r14d, r14d
+    shown_red_price = screen_price('c4e1fa2cc0', '31c0')
     strings = cave.here
     for name in 'bf':
         cave.data += f'bb:{name}'.encode() + b'\0'
@@ -116,10 +153,11 @@ def code_writes():
     flag.jmp(hook)
     flag.raw('909090')
     writes = [(cave.offset, bytes(cave.data)), (flag.offset, bytes(flag.data))]
-    for site, target in ((RAISE, raise_price), (LOWER, lower_price)):
+    for site, target, length in ((RAISE, raise_price, 11), (LOWER, lower_price, 11), (TOTAL, total_price, 13),
+                                 (AFFORD, afford_price, 7), (SHOWN, shown_price, 5), (SHOWN_RED, shown_red_price, 5)):
         call = quit_menu.Code(site)
         call.call(target)
-        call.raw('90' * 6)
+        call.raw('90' * (length - 5))
         writes.append((call.offset, bytes(call.data)))
     return writes
 
