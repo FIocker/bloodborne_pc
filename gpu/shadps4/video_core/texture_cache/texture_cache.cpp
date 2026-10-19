@@ -26,6 +26,7 @@
 #include "video_core/texture_cache/host_compatibility.h"
 #include "video_core/texture_cache/texture_cache.h"
 #include "video_core/texture_cache/tile_manager.h"
+#include <vk_mem_alloc.h>
 
 namespace VideoCore {
 
@@ -1201,6 +1202,18 @@ void TextureCache::ReportMemory() {
                 (unsigned long long)(process.private_bytes >> 20),
                 (unsigned long long)(process.working_set >> 20));
     std::fflush(stdout);
+    // bbport: BB_VMA_DUMP=<file> (the benchmark's vram.json): the allocator's detailed statistics
+    // (every allocation, its type, size and usage) written there with each memory line.
+    static const char* vma_dump = std::getenv("BB_VMA_DUMP");
+    if (vma_dump && vma_dump[0]) {
+        char* stats = nullptr;
+        vmaBuildStatsString(instance.GetAllocator(), &stats, VK_TRUE);
+        if (FILE* file = std::fopen(vma_dump, "wb")) {
+            std::fputs(stats, file);
+            std::fclose(file);
+        }
+        vmaFreeStatsString(instance.GetAllocator(), stats);
+    }
 }
 
 void TextureCache::GarbageCollectImages() {
