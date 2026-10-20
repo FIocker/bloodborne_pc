@@ -142,7 +142,7 @@ adapted from [bbhost](https://github.com/droogie/bbhost) by droogie (GPL-3.0-or-
 team for their guidance, and to Wozzardman's [shadp2p](https://github.com/Wozzardman/shadp2p),
 which bbport's first online version was built on.
 
-The low-VRAM profile for 4 GB graphics cards comes from the 4 GB mod by **Fixdag** and
+The low-VRAM profile for 4 GB graphics cards comes from the 4 GB mod by **fixdag** and
 **bashiku**.
 
 Also used: [FSR-Vulkan](https://github.com/FireBurn/FSR-Vulkan) and the AMD FidelityFX SDK

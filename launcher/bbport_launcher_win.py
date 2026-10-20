@@ -2102,8 +2102,8 @@ class Launcher:
                    '(preset changes then need a restart).',
                    'Больший бюджет текстур и, при 1080p с апскейлером, уменьшенная сцена с запуска '
                    '(смена пресета тогда требует перезапуска).'))
-        ttk.Label(f, text=_('Low-VRAM profile by Fixdag and bashiku.',
-                            'Профиль для малого объёма видеопамяти: Fixdag и bashiku.'),
+        ttk.Label(f, text=_('Low-VRAM profile by fixdag and bashiku.',
+                            'Профиль для малого объёма видеопамяти: fixdag и bashiku.'),
                   style='Muted.TLabel').grid(row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(8, 0))
         self.section(f, _('Diagnostics', 'Для разработчика'))
         self.check(f, 'frame_stats', 'app', _('Frame statistics in the log (every 5 s)', 'Статистика кадров в журнале (раз в 5 с)'))
