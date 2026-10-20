@@ -4,7 +4,6 @@
 #pragma once
 
 #include <cstddef>
-#include <memory>
 #include <optional>
 #include <span>
 #include <string_view>

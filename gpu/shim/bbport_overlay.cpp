@@ -376,7 +376,7 @@ void Menu() {
         }
         ImGui::EndCombo();
     }
-    Hint("On: output and presets change without restarting, while game post-processing stays at 1080p. Off: the scene is patched to the preset resolution at startup. Auto enables the live path on capable discrete GPUs. Changes apply after restarting the game.");
+    Hint("On: output and presets change without restarting, while game post-processing stays at 1080p. Off: the scene is patched to the preset resolution at startup. Auto enables the live path on capable discrete GPUs, except for outputs above 1080p with depth of field on (the live path blurs those scenes). Changes apply after restarting the game.");
     ImGui::SeparatorText("Frame generation & Reflex");
     static const char* fg_backends[] = {"DLSS Frame Generation", "FSR Frame Generation"};
     int current_fg_backend = s.fg_backend;

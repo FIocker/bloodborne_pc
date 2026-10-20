@@ -164,21 +164,32 @@ class QuitMenuTests(unittest.TestCase):
     def test_code_fits_and_links(self):
         writes = dict(quit_menu.code_writes())
         cave = writes[quit_menu.CAVE]
-        self.assertLessEqual(len(cave), 0x80)  # the old handler's size
+        self.assertLessEqual(quit_menu.CAVE + len(cave), quit_menu.CAVE_END)
+        self.assertGreaterEqual(quit_menu.CAVE, quit_menu.CODE_END)
         self.assertIn(b'bb:q\0', cave)
+        # The Language item: a jump into the new code, then nops up to the game's own text lookup.
         item = writes[quit_menu.SYSTEM_ITEM]
-        self.assertEqual(len(item), quit_menu.SYSTEM_CONDITION - quit_menu.SYSTEM_ITEM)
-        self.assertEqual(len(writes[quit_menu.SYSTEM_CONDITION]),
-                         quit_menu.SYSTEM_REMOVE - quit_menu.SYSTEM_CONDITION)
+        self.assertEqual(len(item), quit_menu.SYSTEM_TEXT - quit_menu.SYSTEM_ITEM)
+        self.assertEqual(item[0], 0xE9)
+        self.assertNotIn(quit_menu.SYSTEM_KEEP, writes)  # the game's condition code stays
+        in_cave = lambda target: quit_menu.CAVE <= target < quit_menu.CAVE + len(cave)
+        self.assertTrue(in_cave(quit_menu.SYSTEM_ITEM + 5 + struct.unpack_from('<i', item, 1)[0]))
         # The title condition and the Exit Game dialog call into the new code.
         for site, size in ((quit_menu.TITLE_CONDITION, 5), (quit_menu.EXIT_DIALOG, 10)):
             data = writes[site]
             self.assertEqual((len(data), data[0]), (size, 0xE8))
-            target = site + 5 + struct.unpack_from('<i', data, 1)[0]
-            self.assertTrue(quit_menu.CAVE <= target < quit_menu.CAVE + 0x60 or
-                            quit_menu.SYSTEM_ITEM <= target < quit_menu.SYSTEM_CONDITION, hex(target))
+            self.assertTrue(in_cave(site + 5 + struct.unpack_from('<i', data, 1)[0]))
         slot, = struct.unpack('<Q', writes[quit_menu.OPINION_SLOT])
-        self.assertTrue(quit_menu.CAVE <= slot - EBOOT_BASE < quit_menu.CAVE + 0x60)
+        self.assertTrue(in_cave(slot - EBOOT_BASE))
+        for name in 'tqpd':
+            self.assertEqual(cave.count(f'bb:{name}'.encode() + b'\0'), 1)
+
+    def test_segment_layout(self):
+        quit_menu.check_segments([(0, quit_menu.CODE_END), (0x50DC000, 0x56D30F4)])
+        with self.assertRaises(ValueError):
+            quit_menu.check_segments([(0, quit_menu.CODE_END + 4), (0x50DC000, 0x56D30F4)])
+        with self.assertRaises(ValueError):
+            quit_menu.check_segments([(0, quit_menu.CODE_END), (0x50D9800, 0x56D30F4)])
 
 
 if __name__ == '__main__':

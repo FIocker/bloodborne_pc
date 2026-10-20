@@ -252,10 +252,24 @@ static void set_host_name(const char *name) {
 #define exit_setjmp(t) setjmp((t)->exit_jump)
 #define exit_longjmp(t) longjmp((t)->exit_jump,1)
 #endif
+/* Guest priorities run 256 (highest) to 767; the game's are 700 except FMOD's (256-265).
+ * Host threads all ran at normal priority, so on 6-core CPUs the draw workers and game
+ * threads delayed FMOD's mixer and output threads: underruns heard as crackling.
+ * BB_THREAD_PRIORITY=0 keeps every thread at normal priority. */
+static void set_host_priority(int prio) {
+#ifdef _WIN32
+    static int enabled=-1;
+    if (enabled<0) { const char *e=getenv("BB_THREAD_PRIORITY"); enabled=!e || e[0]!='0'; }
+    if (enabled && prio<400) SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_HIGHEST);
+#else
+    (void)prio;
+#endif
+}
 static void *host_start(void *p) {
     GuestThread *t=p;
     attach(t);
     set_host_name(t->name);
+    set_host_priority(t->attr.prio);
     if (!exit_setjmp(t)) t->result=t->entry(t->argument);
     runtime_thread_keys_cleanup();
     pthread_mutex_lock(&lock); t->finished=1; ++exited; pthread_mutex_unlock(&lock);

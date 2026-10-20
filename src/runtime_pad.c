@@ -493,6 +493,19 @@ static void configure_prompts(const InputConfig *cfg) {
         list[icon]=text[icon];
     }
     bbgpu_prompts_configure(list,PROMPT_ICONS);
+    /* On a controller: the button each one-action icon's action is bound to ("" for none), so
+     * a rebound action shows its new button. */
+    const char *pad[PROMPT_ICONS];
+    for (int icon=0;icon<PROMPT_ICONS;++icon) {
+        pad[icon]="";
+        if (prompt_output_count[icon]!=1) continue;
+        const InputOutput out=prompt_outputs[icon][0];
+        for (int i=0;i<cfg->table.binding_count[out];++i) {
+            const char *name=input_binding_controller_name(&cfg->table.bindings[out][i]);
+            if (name) { pad[icon]=name; break; }
+        }
+    }
+    bbgpu_prompts_configure_pad(pad,PROMPT_ICONS);
 }
 static void ensure_config_loaded(void) {
     if (config_initialized) return;

@@ -91,17 +91,17 @@ static void WaitGpuIdle() {
     cv_lock.wait(lock, [] { return submission_lock == 0; });
 }
 
-// Write a special NOP packet with N DWs data block
-static inline u32* WriteNop(u32* cmdbuf, u32 data_block_size) {
+// Write a special ending NOP packet with N DWs data block
+static inline u32* WriteTrailingNop(u32* cmdbuf, u32 data_block_size) {
     auto* nop = reinterpret_cast<PM4CmdNop*>(cmdbuf);
     nop->header = PM4Type3Header{PM4ItOpcode::Nop, data_block_size - 1};
     nop->data_block[0] = 0u; // only one out of `data_block_size` is initialized
     return cmdbuf + data_block_size + 1 /* header */;
 }
 
-// Write a special NOP packet with N DWs data block
+// Write a special ending NOP packet with N DWs data block
 template <u32 data_block_size>
-static inline u32* WriteNop(u32* cmdbuf) {
+static inline u32* WriteTrailingNop(u32* cmdbuf) {
     auto* nop = reinterpret_cast<PM4CmdNop*>(cmdbuf);
     nop->header = PM4Type3Header{PM4ItOpcode::Nop, data_block_size - 1};
     nop->data_block[0] = 0u; // only one out of `data_block_size` is initialized
@@ -179,7 +179,9 @@ s32 PS4_SYSV_ABI sceGnmComputeWaitOnAddress(u32* cmdbuf, u32 size, uintptr_t add
     LOG_TRACE(Lib_GnmDriver, "called");
 
     if (cmdbuf && (size == 0xe)) {
-        cmdbuf = WriteNop<3>(cmdbuf);
+        cmdbuf = WriteHeader<PM4ItOpcode::Nop>(cmdbuf, 3);
+        cmdbuf = WriteBody(cmdbuf, 0u);
+        cmdbuf += 2;
 
         const u32 is_mem = addr > 0xffffu;
         const u32 addr_mask = is_mem ? 0xfffffffcu : 0xffffu;
@@ -192,25 +194,15 @@ s32 PS4_SYSV_ABI sceGnmComputeWaitOnAddress(u32* cmdbuf, u32 size, uintptr_t add
         wait_reg_mem->mask = mask;
         wait_reg_mem->poll_interval = 10u;
 
-        WriteNop<2>(cmdbuf + 7);
+        WriteTrailingNop<2>(cmdbuf + 7);
         return ORBIS_OK;
     }
     return -1;
 }
 
-s32 PS4_SYSV_ABI sceGnmComputeWaitSemaphore(u32* cmdbuf, u32 size, u64 sem_addr, u32 flags) {
-    LOG_TRACE(Lib_GnmDriver, "called");
-    if (cmdbuf && size == 0xa) {
-        cmdbuf = WriteNop<3>(cmdbuf);
-        cmdbuf = WriteHeader<PM4ItOpcode::MemSemaphore>(cmdbuf, 2);
-        cmdbuf[0] = u32(sem_addr);
-        cmdbuf[1] = (flags == 1 ? 0x100000 : 0) - 0x20000000 + u32(sem_addr >> 0x20);
-        cmdbuf += 2;
-
-        WriteNop<2>(cmdbuf);
-        return ORBIS_OK;
-    }
-    return -1;
+int PS4_SYSV_ABI sceGnmComputeWaitSemaphore() {
+    LOG_ERROR(Lib_GnmDriver, "(STUBBED) called");
+    return ORBIS_OK;
 }
 
 int PS4_SYSV_ABI sceGnmCreateWorkloadStream(u64 param1, u32* workload_stream) {
@@ -393,7 +385,7 @@ s32 PS4_SYSV_ABI sceGnmDispatchDirect(u32* cmdbuf, u32 size, u32 threads_x, u32 
         cmdbuf = WriteBody(cmdbuf, threads_x, threads_y, threads_z);
         cmdbuf[0] = (flags & 0x18) + 1; // ordered append mode
 
-        WriteNop<3>(cmdbuf + 1);
+        WriteTrailingNop<3>(cmdbuf + 1);
         return ORBIS_OK;
     }
     return -1;
@@ -409,7 +401,7 @@ s32 PS4_SYSV_ABI sceGnmDispatchIndirect(u32* cmdbuf, u32 size, u32 data_offset, 
         cmdbuf[0] = data_offset;
         cmdbuf[1] = (flags & 0x18) + 1; // ordered append mode
 
-        WriteNop<3>(cmdbuf + 2);
+        WriteTrailingNop<3>(cmdbuf + 2);
         return ORBIS_OK;
     }
     return -1;
@@ -476,7 +468,7 @@ s32 PS4_SYSV_ABI sceGnmDrawIndex(u32* cmdbuf, u32 size, u32 index_count, uintptr
         draw_index->index_count = index_count;
         draw_index->draw_initiator = sceKernelIsNeoMode() ? flags & 0xe0000000u : 0;
 
-        WriteNop<3>(cmdbuf + 6);
+        WriteTrailingNop<3>(cmdbuf + 6);
         return ORBIS_OK;
     }
     return -1;
@@ -490,7 +482,7 @@ s32 PS4_SYSV_ABI sceGnmDrawIndexAuto(u32* cmdbuf, u32 size, u32 index_count, u32
         cmdbuf = WritePacket<PM4ItOpcode::DrawIndexAuto>(
             cmdbuf, PM4ShaderType::ShaderGraphics, index_count,
             sceKernelIsNeoMode() ? flags & 0xe0000000u | 2u : 2u);
-        WriteNop<3>(cmdbuf);
+        WriteTrailingNop<3>(cmdbuf);
         return ORBIS_OK;
     }
     return -1;
@@ -516,7 +508,7 @@ s32 PS4_SYSV_ABI sceGnmDrawIndexIndirect(u32* cmdbuf, u32 size, u32 data_offset,
         cmdbuf[3] = sceKernelIsNeoMode() ? flags & 0xe0000000u : 0u;
 
         cmdbuf += 4;
-        WriteNop<3>(cmdbuf);
+        WriteTrailingNop<3>(cmdbuf);
         return ORBIS_OK;
     }
     return -1;
@@ -533,7 +525,9 @@ s32 PS4_SYSV_ABI sceGnmDrawIndexIndirectCountMulti(u32* cmdbuf, u32 size, u32 da
         (shader_stage == ShaderStages::Vs || shader_stage == ShaderStages::Es ||
          shader_stage == ShaderStages::Ls)) {
 
-        cmdbuf = WriteNop<2>(cmdbuf);
+        cmdbuf = WriteHeader<PM4ItOpcode::Nop>(cmdbuf, 2);
+        cmdbuf = WriteBody(cmdbuf, 0u);
+        cmdbuf += 1;
 
         const auto predicate = flags & 1 ? PM4Predicate::PredEnable : PM4Predicate::PredDisable;
         cmdbuf = WriteHeader<PM4ItOpcode::DrawIndexIndirectCountMulti>(
@@ -551,7 +545,7 @@ s32 PS4_SYSV_ABI sceGnmDrawIndexIndirectCountMulti(u32* cmdbuf, u32 size, u32 da
         cmdbuf[8] = sceKernelIsNeoMode() ? flags & 0xe0000000u : 0;
 
         cmdbuf += 9;
-        WriteNop<2>(cmdbuf);
+        WriteTrailingNop<2>(cmdbuf);
         return ORBIS_OK;
     }
     return -1;
@@ -580,7 +574,7 @@ int PS4_SYSV_ABI sceGnmDrawIndexIndirectMulti(u32* cmdbuf, u32 size, u32 data_of
         cmdbuf[5] = sceKernelIsNeoMode() ? flags & 0xe0000000u : 0;
 
         cmdbuf += 6;
-        WriteNop<3>(cmdbuf);
+        WriteTrailingNop<3>(cmdbuf);
         return ORBIS_OK;
     }
     return -1;
@@ -603,7 +597,7 @@ s32 PS4_SYSV_ABI sceGnmDrawIndexOffset(u32* cmdbuf, u32 size, u32 index_offset, 
         cmdbuf = WriteBody(cmdbuf, index_count, index_offset, index_count,
                            sceKernelIsNeoMode() ? flags & 0xe0000000u : 0u);
 
-        WriteNop<3>(cmdbuf);
+        WriteTrailingNop<3>(cmdbuf);
         return ORBIS_OK;
     }
     return -1;
@@ -628,43 +622,16 @@ s32 PS4_SYSV_ABI sceGnmDrawIndirect(u32* cmdbuf, u32 size, u32 data_offset, u32 
         cmdbuf[3] = sceKernelIsNeoMode() ? flags & 0xe0000000u | 2u : 2u; // auto index
 
         cmdbuf += 4;
-        WriteNop<3>(cmdbuf);
+        WriteTrailingNop<3>(cmdbuf);
         return ORBIS_OK;
     }
     return -1;
 }
 
-s32 PS4_SYSV_ABI sceGnmDrawIndirectCountMulti(u32* cmdbuf, u32 size, u32 data_offset, u32 max_count,
-                                              u64 count_addr, u32 shader_stage,
-                                              u32 vertex_sgpr_offset, u32 instance_sgpr_offset,
-                                              u32 flags) {
-    LOG_TRACE(Lib_GnmDriver, "called");
-
-    if (cmdbuf && (size == 0x10) && (shader_stage < ShaderStages::Max) &&
-        (vertex_sgpr_offset < 0x10u) && (instance_sgpr_offset < 0x10u)) {
-
-        cmdbuf = WriteNop<2>(cmdbuf);
-
-        const auto predicate = flags & 1 ? PM4Predicate::PredEnable : PM4Predicate::PredDisable;
-        cmdbuf = WriteHeader<PM4ItOpcode::DrawIndirectCountMulti>(
-            cmdbuf, 9, PM4ShaderType::ShaderGraphics, predicate);
-
-        const auto sgpr_offset = indirect_sgpr_offsets[shader_stage];
-
-        cmdbuf[0] = data_offset;
-        cmdbuf[1] = vertex_sgpr_offset == 0 ? 0 : (vertex_sgpr_offset & 0xffffu) + sgpr_offset;
-        cmdbuf[2] = instance_sgpr_offset == 0 ? 0 : (instance_sgpr_offset & 0xffffu) + sgpr_offset;
-        cmdbuf[3] = (count_addr != 0 ? 1u : 0u) << 0x1e;
-        cmdbuf[4] = max_count;
-        *(u64*)(&cmdbuf[5]) = count_addr;
-        cmdbuf[7] = sizeof(DrawIndirectArgs);
-        cmdbuf[8] = sceKernelIsNeoMode() ? flags & 0xe0000000u | 2u : 2u; // auto index
-
-        cmdbuf += 9;
-        WriteNop<2>(cmdbuf);
-        return ORBIS_OK;
-    }
-    return -1;
+int PS4_SYSV_ABI sceGnmDrawIndirectCountMulti() {
+    LOG_ERROR(Lib_GnmDriver, "(STUBBED) called");
+    UNREACHABLE();
+    return ORBIS_OK;
 }
 
 s32 PS4_SYSV_ABI sceGnmDrawIndirectMulti(u32* cmdbuf, u32 size, u32 data_offset, u32 max_count,
@@ -676,7 +643,7 @@ s32 PS4_SYSV_ABI sceGnmDrawIndirectMulti(u32* cmdbuf, u32 size, u32 data_offset,
         instance_sgpr_offset < 0x10) {
         const auto predicate = flags & 1 ? PM4Predicate::PredEnable : PM4Predicate::PredDisable;
         cmdbuf = WriteHeader<PM4ItOpcode::DrawIndirectMulti>(
-            cmdbuf, 6, PM4ShaderType::ShaderGraphics, predicate);
+            cmdbuf, 4, PM4ShaderType::ShaderGraphics, predicate);
 
         const auto sgpr_offset = indirect_sgpr_offsets[shader_stage];
         cmdbuf[0] = data_offset;
@@ -687,7 +654,7 @@ s32 PS4_SYSV_ABI sceGnmDrawIndirectMulti(u32* cmdbuf, u32 size, u32 data_offset,
         cmdbuf[5] = sceKernelIsNeoMode() ? flags & 0xe0000000u | 2u : 2u; // auto index
 
         cmdbuf += 6;
-        WriteNop<3>(cmdbuf);
+        WriteTrailingNop<3>(cmdbuf);
         return ORBIS_OK;
     }
     return -1;
@@ -710,7 +677,7 @@ u32 PS4_SYSV_ABI sceGnmDrawInitDefaultHardwareState(u32* cmdbuf, u32 size) {
         cmdbuf += InitSequence.size() - 2;
 
         const auto cmdbuf_left = cmdbuf_end - cmdbuf - 1;
-        WriteNop(cmdbuf, cmdbuf_left);
+        WriteTrailingNop(cmdbuf, cmdbuf_left);
 
         return HwInitPacketSize;
     };
@@ -731,7 +698,7 @@ u32 PS4_SYSV_ABI sceGnmDrawInitDefaultHardwareState175(u32* cmdbuf, u32 size) {
     cmdbuf += InitSequence175.size() - 2;
 
     const auto cmdbuf_left = cmdbuf_end - cmdbuf - 1;
-    WriteNop(cmdbuf, cmdbuf_left);
+    WriteTrailingNop(cmdbuf, cmdbuf_left);
 
     return HwInitPacketSize;
 }
@@ -764,7 +731,7 @@ u32 PS4_SYSV_ABI sceGnmDrawInitDefaultHardwareState200(u32* cmdbuf, u32 size) {
         }
 
         const auto cmdbuf_left = cmdbuf_end - cmdbuf - 1;
-        WriteNop(cmdbuf, cmdbuf_left);
+        WriteTrailingNop(cmdbuf, cmdbuf_left);
 
         return HwInitPacketSize;
     };
@@ -800,7 +767,7 @@ u32 PS4_SYSV_ABI sceGnmDrawInitDefaultHardwareState350(u32* cmdbuf, u32 size) {
         }
 
         const auto cmdbuf_left = cmdbuf_end - cmdbuf - 1;
-        WriteNop(cmdbuf, cmdbuf_left);
+        WriteTrailingNop(cmdbuf, cmdbuf_left);
 
         return HwInitPacketSize;
     };
@@ -1257,7 +1224,7 @@ int PS4_SYSV_ABI sceGnmMapComputeQueue(u32 pipe_id, u32 queue_id, VAddr ring_bas
     }
 
     const auto vqid =
-        liverpool->asc_queues.Insert(VAddr(ring_base_addr), read_ptr_addr, ring_size_dw, pipe_id);
+        liverpool->asc_queues.insert(VAddr(ring_base_addr), read_ptr_addr, ring_size_dw, pipe_id);
     // We need to offset index as `dingDong` assumes it to be from the range [1..64]
     const auto gnm_vqid = vqid.index + 1;
     LOG_INFO(Lib_GnmDriver, "ASC pipe {} queue {} mapped to vqueue {}", pipe_id, queue_id,
@@ -1579,7 +1546,7 @@ s32 PS4_SYSV_ABI sceGnmSetCsShader(u32* cmdbuf, u32 size, const u32* cs_regs) {
         cmdbuf, 0x207u, cs_regs[4], cs_regs[5],
         cs_regs[6]); // COMPUTE_NUM_THREAD_X/COMPUTE_NUM_THREAD_Y/COMPUTE_NUM_THREAD_Z
 
-    WriteNop<11>(cmdbuf);
+    WriteTrailingNop<11>(cmdbuf);
     return ORBIS_OK;
 }
 
@@ -1612,7 +1579,7 @@ s32 PS4_SYSV_ABI sceGnmSetCsShaderWithModifier(u32* cmdbuf, u32 size, const u32*
         cmdbuf, 0x207u, cs_regs[4], cs_regs[5],
         cs_regs[6]); // COMPUTE_NUM_THREAD_X/COMPUTE_NUM_THREAD_Y/COMPUTE_NUM_THREAD_Z
 
-    WriteNop<11>(cmdbuf);
+    WriteTrailingNop<11>(cmdbuf);
     return ORBIS_OK;
 }
 
@@ -1646,7 +1613,7 @@ s32 PS4_SYSV_ABI sceGnmSetEmbeddedPsShader(u32* cmdbuf, u32 size, u32 shader_id,
 
     constexpr static std::array ps1_code alignas(256) = {
         0xbeeb03ffu, 0x00000003u, // s_mov_b32     vcc_hi, $0x00000003
-        0x7e040280u,              // v_mov_b32     v2, 0
+        0x7e040280u,              // v_mov_b32     v2, 0 
         0xf8001803u, 0x02020202u, // exp           mrt0, v2, v2, off, off vm done
         0xbf810000u,              // s_endpgm
 
@@ -1680,7 +1647,7 @@ s32 PS4_SYSV_ABI sceGnmSetEmbeddedPsShader(u32* cmdbuf, u32 size, u32 shader_id,
     cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x203u, ps_regs[10]); // DB_SHADER_CONTROL
     cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x8fu, ps_regs[11]);  // CB_SHADER_MASK
 
-    WriteNop<11>(cmdbuf);
+    WriteTrailingNop<11>(cmdbuf);
 
     return ORBIS_OK;
 }
@@ -1733,7 +1700,7 @@ s32 PS4_SYSV_ABI sceGnmSetEmbeddedVsShader(u32* cmdbuf, u32 size, u32 shader_id,
     cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x1b1u, vs_regs[4]); // SPI_VS_OUT_CONFIG
     cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x1c3u, vs_regs[5]); // SPI_SHADER_POS_FORMAT
 
-    WriteNop<11>(cmdbuf);
+    WriteTrailingNop<11>(cmdbuf);
     return ORBIS_OK;
 }
 
@@ -1764,26 +1731,12 @@ s32 PS4_SYSV_ABI sceGnmSetEsShader(u32* cmdbuf, u32 size, const u32* es_regs, u3
     cmdbuf = PM4CmdSetData::SetShReg(cmdbuf, 0xc8u, es_regs[0], 0u);  // SPI_SHADER_PGM_LO_ES
     cmdbuf = PM4CmdSetData::SetShReg(cmdbuf, 0xcau, var, es_regs[3]); // SPI_SHADER_PGM_RSRC1_ES
 
-    WriteNop<11>(cmdbuf);
+    WriteTrailingNop<11>(cmdbuf);
     return ORBIS_OK;
 }
 
-s32 PS4_SYSV_ABI sceGnmSetGsRingSizes(u32 esgs_ring_size, u32 gsvs_ring_size) {
-    LOG_TRACE(Lib_GnmDriver, "esgs_ring_size = {:#x}, gsvs_ring_size = {:#x}", esgs_ring_size,
-              gsvs_ring_size);
-    // Sony libSceGnmDriver validates 1 MB alignment and [4 MB, 8 MB] range.
-    constexpr u32 MinRingSize = 0x400000;   // 4 MB
-    constexpr u32 MaxRingSize = 0x800000;   // 8 MB
-    constexpr u32 RingAlignment = 0x100000; // 1 MB
-    if (esgs_ring_size < MinRingSize || esgs_ring_size > MaxRingSize ||
-        ((esgs_ring_size & (RingAlignment - 1)) != 0) || gsvs_ring_size < MinRingSize ||
-        gsvs_ring_size > MaxRingSize || ((gsvs_ring_size & (RingAlignment - 1)) != 0)) {
-        return 0x08000000;
-    }
-    if (liverpool) {
-        liverpool->regs.vgt_esgs_ring_size = esgs_ring_size >> 8;
-        liverpool->regs.vgt_gsvs_ring_size = gsvs_ring_size >> 8;
-    }
+int PS4_SYSV_ABI sceGnmSetGsRingSizes() {
+    LOG_ERROR(Lib_GnmDriver, "(STUBBED) called");
     return ORBIS_OK;
 }
 
@@ -1811,7 +1764,7 @@ s32 PS4_SYSV_ABI sceGnmSetGsShader(u32* cmdbuf, u32 size, const u32* gs_regs) {
     cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x29bu, gs_regs[5]); // VGT_GS_OUT_PRIM_TYPE
     cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x2e4u, gs_regs[6]); // VGT_GS_INSTANCE_CNT
 
-    WriteNop<11>(cmdbuf);
+    WriteTrailingNop<11>(cmdbuf);
     return ORBIS_OK;
 }
 
@@ -1841,7 +1794,7 @@ s32 PS4_SYSV_ABI sceGnmSetHsShader(u32* cmdbuf, u32 size, const u32* hs_regs, u3
     cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x2d6u, param4);     // VGT_LS_HS_CONFIG
 
     // right padding?
-    WriteNop<11>(cmdbuf);
+    WriteTrailingNop<11>(cmdbuf);
     return ORBIS_OK;
 }
 
@@ -1874,7 +1827,7 @@ s32 PS4_SYSV_ABI sceGnmSetLsShader(u32* cmdbuf, u32 size, const u32* ls_regs, u3
     cmdbuf = PM4CmdSetData::SetShReg(cmdbuf, 0x14bu, ls_regs[3]);      // SPI_SHADER_PGM_RSRC2_LS
     cmdbuf = PM4CmdSetData::SetShReg(cmdbuf, 0x14au, var, ls_regs[3]); // SPI_SHADER_PGM_RSRC1_LS
 
-    WriteNop<11>(cmdbuf);
+    WriteTrailingNop<11>(cmdbuf);
     return ORBIS_OK;
 }
 
@@ -1889,7 +1842,7 @@ s32 PS4_SYSV_ABI sceGnmSetPsShader(u32* cmdbuf, u32 size, const u32* ps_regs) {
                                          0u); // SPI_SHADER_PGM_LO_PS/SPI_SHADER_PGM_HI_PS
         cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x203u, 0u); // DB_SHADER_CONTROL
 
-        WriteNop<0x20>(cmdbuf);
+        WriteTrailingNop<0x20>(cmdbuf);
     } else {
         if (ps_regs[1] != 0) {
             LOG_ERROR(Lib_GnmDriver, "Invalid shader address.");
@@ -1910,7 +1863,7 @@ s32 PS4_SYSV_ABI sceGnmSetPsShader(u32* cmdbuf, u32 size, const u32* ps_regs) {
         cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x203u, ps_regs[10]); // DB_SHADER_CONTROL
         cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x8fu, ps_regs[11]);  // CB_SHADER_MASK
 
-        WriteNop<11>(cmdbuf);
+        WriteTrailingNop<11>(cmdbuf);
     }
     return ORBIS_OK;
 }
@@ -1927,7 +1880,7 @@ s32 PS4_SYSV_ABI sceGnmSetPsShader350(u32* cmdbuf, u32 size, const u32* ps_regs)
         cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x203u, 0u);  // DB_SHADER_CONTROL
         cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x8fu, 0xfu); // CB_SHADER_MASK
 
-        WriteNop<0x1d>(cmdbuf);
+        WriteTrailingNop<0x1d>(cmdbuf);
     } else {
         if (ps_regs[1] != 0) {
             LOG_ERROR(Lib_GnmDriver, "Invalid shader address.");
@@ -1948,7 +1901,7 @@ s32 PS4_SYSV_ABI sceGnmSetPsShader350(u32* cmdbuf, u32 size, const u32* ps_regs)
         cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x203u, ps_regs[10]); // DB_SHADER_CONTROL
         cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x8fu, ps_regs[11]);  // CB_SHADER_MASK
 
-        WriteNop<11>(cmdbuf);
+        WriteTrailingNop<11>(cmdbuf);
     }
     return ORBIS_OK;
 }
@@ -1977,24 +1930,8 @@ int PS4_SYSV_ABI sceGnmSetSpiEnableSqCountersForUnitInstance() {
     return ORBIS_GNM_ERROR_FAILURE;
 }
 
-s32 PS4_SYSV_ABI sceGnmSetupMipStatsReport(void* output_buffer, u32 size_in_bytes,
-                                           u8 intervals_between_reports,
-                                           u8 num_reports_before_reset, u32 mip_stats_reset_force) {
-    LOG_DEBUG(
-        Lib_GnmDriver,
-        "(STUBBED) output_buffer = {}, size_in_bytes = {:#x}, intervals = {}, num_reports = {}, "
-        "force_reset = {}",
-        output_buffer, size_in_bytes, intervals_between_reports, num_reports_before_reset,
-        mip_stats_reset_force);
-    if (!output_buffer ||
-        (reinterpret_cast<uintptr_t>(output_buffer) & 0xffffff000000003fULL) != 0) {
-        return 0x80000001;
-    }
-    if (size_in_bytes < 0x1040 || (size_in_bytes & 0x7ff) != 0x40) {
-        return 0x80000002;
-    }
-    std::memset(output_buffer, 0, size_in_bytes);
-    *static_cast<u32*>(output_buffer) = 0x40u;
+int PS4_SYSV_ABI sceGnmSetupMipStatsReport() {
+    LOG_ERROR(Lib_GnmDriver, "(STUBBED) called");
     return ORBIS_OK;
 }
 
@@ -2058,7 +1995,7 @@ s32 PS4_SYSV_ABI sceGnmSetVsShader(u32* cmdbuf, u32 size, const u32* vs_regs, u3
     cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x1b1u, vs_regs[4]); // SPI_VS_OUT_CONFIG
     cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x1c3u, vs_regs[5]); // SPI_SHADER_POS_FORMAT
 
-    WriteNop<11>(cmdbuf);
+    WriteTrailingNop<11>(cmdbuf);
     return ORBIS_OK;
 }
 
@@ -2506,7 +2443,7 @@ s32 PS4_SYSV_ABI sceGnmSubmitDone() {
 }
 
 int PS4_SYSV_ABI sceGnmUnmapComputeQueue(u32 vqid) {
-    liverpool->asc_queues.Erase(Common::SlotId{vqid - 1});
+    liverpool->asc_queues.erase(Common::SlotId{vqid - 1});
     return ORBIS_OK;
 }
 
@@ -2555,7 +2492,7 @@ s32 PS4_SYSV_ABI sceGnmUpdateGsShader(u32* cmdbuf, u32 size, const u32* gs_regs)
     cmdbuf = WritePacket<PM4ItOpcode::Nop>(cmdbuf, PM4ShaderType::ShaderGraphics, 0xc01e02e4u,
                                            gs_regs[6]);
 
-    WriteNop<11>(cmdbuf);
+    WriteTrailingNop<11>(cmdbuf);
     return ORBIS_OK;
 }
 
@@ -2588,7 +2525,7 @@ int PS4_SYSV_ABI sceGnmUpdateHsShader(u32* cmdbuf, u32 size, const u32* hs_regs,
     cmdbuf = WritePacket<PM4ItOpcode::Nop>(cmdbuf, PM4ShaderType::ShaderGraphics, 0xc01e02d6u,
                                            ls_hs_config); // VGT_LS_HS_CONFIG update
 
-    WriteNop<11>(cmdbuf);
+    WriteTrailingNop<11>(cmdbuf);
     return ORBIS_OK;
 }
 
@@ -2603,7 +2540,7 @@ s32 PS4_SYSV_ABI sceGnmUpdatePsShader(u32* cmdbuf, u32 size, const u32* ps_regs)
                                          0u); // SPI_SHADER_PGM_LO_PS/SPI_SHADER_PGM_HI_PS
         cmdbuf = WritePacket<PM4ItOpcode::Nop>(cmdbuf, PM4ShaderType::ShaderGraphics, 0xc01e0203u,
                                                0u); // DB_SHADER_CONTROL update
-        WriteNop<0x20>(cmdbuf);
+        WriteTrailingNop<0x20>(cmdbuf);
     } else {
         if (ps_regs[1] != 0) {
             LOG_ERROR(Lib_GnmDriver, "Invalid shader address.");
@@ -2630,7 +2567,7 @@ s32 PS4_SYSV_ABI sceGnmUpdatePsShader(u32* cmdbuf, u32 size, const u32* ps_regs)
         cmdbuf = WritePacket<PM4ItOpcode::Nop>(cmdbuf, PM4ShaderType::ShaderGraphics, 0xc01e008fu,
                                                ps_regs[11]); // CB_SHADER_MASK update
 
-        WriteNop<11>(cmdbuf);
+        WriteTrailingNop<11>(cmdbuf);
     }
     return ORBIS_OK;
 }
@@ -2648,7 +2585,7 @@ s32 PS4_SYSV_ABI sceGnmUpdatePsShader350(u32* cmdbuf, u32 size, const u32* ps_re
                                                0u);                 // DB_SHADER_CONTROL update
         cmdbuf = PM4CmdSetData::SetContextReg(cmdbuf, 0x8fu, 0xfu); // CB_SHADER_MASK
 
-        WriteNop<0x1d>(cmdbuf);
+        WriteTrailingNop<0x1d>(cmdbuf);
     } else {
         if (ps_regs[1] != 0) {
             LOG_ERROR(Lib_GnmDriver, "Invalid shader address.");
@@ -2675,7 +2612,7 @@ s32 PS4_SYSV_ABI sceGnmUpdatePsShader350(u32* cmdbuf, u32 size, const u32* ps_re
         cmdbuf = WritePacket<PM4ItOpcode::Nop>(cmdbuf, PM4ShaderType::ShaderGraphics, 0xc01e008fu,
                                                ps_regs[11]); // CB_SHADER_MASK update
 
-        WriteNop<11>(cmdbuf);
+        WriteTrailingNop<11>(cmdbuf);
     }
     return ORBIS_OK;
 }
@@ -2714,7 +2651,7 @@ s32 PS4_SYSV_ABI sceGnmUpdateVsShader(u32* cmdbuf, u32 size, const u32* vs_regs,
     cmdbuf = WritePacket<PM4ItOpcode::Nop>(cmdbuf, PM4ShaderType::ShaderGraphics, 0xc01e01c3u,
                                            vs_regs[5]); // PA_CL_VS_OUT_CNTL update
 
-    WriteNop<11>(cmdbuf);
+    WriteTrailingNop<11>(cmdbuf);
     return ORBIS_OK;
 }
 

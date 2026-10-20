@@ -145,5 +145,8 @@ const char *input_output_name(InputOutput out);
 /* A keyboard or mouse binding as input.ini names it, a combination joined with '+'
  * ("lshift+leftbutton"); 0 for a controller binding or a name that does not fit `size`. */
 int input_binding_keyboard_text(const InputBinding *b, char *out, size_t size);
+/* The input.ini name of a single controller button or trigger binding ("circle", "l2"), else
+ * NULL (a key, a stick, a combination). */
+const char *input_binding_controller_name(const InputBinding *b);
 
 #endif

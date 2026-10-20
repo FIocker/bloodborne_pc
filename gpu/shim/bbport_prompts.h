@@ -16,6 +16,11 @@ namespace BbPrompts {
 /// per BbPromptIcons::Icon ("e", "lshift+leftbutton", "w a s d", "mouse", "" for nothing).
 void Configure(const char* const* inputs, int count);
 
+/// Pad thread (input.ini load and F8): the controller button each icon's action is bound to
+/// ("circle", "l2"; "" for none), one per BbPromptIcons::Icon. An icon whose action is on
+/// another button shows that button on a controller.
+void ConfigurePad(const char* const* buttons, int count);
+
 /// What the prompts show: the keyboard and mouse, or a kind of controller.
 enum Device : int { Keyboard, PlayStation, Xbox, Switch };
 

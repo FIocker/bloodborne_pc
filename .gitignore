@@ -29,3 +29,4 @@ patches.json
 # IDE/session-local
 .claude/
 .vscode/
+benchmarks/

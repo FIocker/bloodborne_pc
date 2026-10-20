@@ -76,6 +76,22 @@ ObjectMotion::ObjectMotion(const Instance& instance_, Scheduler& scheduler_)
                     "BB_OBJECT_MOTION=1 turns it on)\n");
         return;
     }
+    // bbport: under 6 GB of VRAM it costs ~225 MiB (its 128 MiB of vertex history and the extra
+    // attachments) that textures need more: off there unless BB_OBJECT_MOTION=1 asks for it.
+    const auto& memory = instance.GetMemoryProperties();
+    u64 vram = 0;
+    for (u32 heap = 0; heap < memory.memoryHeapCount; ++heap) {
+        if (memory.memoryHeaps[heap].flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
+            vram = std::max<u64>(vram, memory.memoryHeaps[heap].size);
+        }
+    }
+    if (props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu && vram < (6ull << 30) - (256ull << 20) &&
+        !(forced && forced[0] == '1')) {
+        std::printf("Object motion: off with %llu MiB of VRAM (under 6 GB the memory goes to "
+                    "textures; BB_OBJECT_MOTION=1 turns it on)\n",
+                    (unsigned long long)(vram >> 20));
+        return;
+    }
     void* mapped = nullptr;
     u64 params_address = 0, positions_address = 0;
     if (!CreateBuffer(instance, vk::DeviceSize(1 + FrameSlots * ParamsPerFrame) * 32, true,

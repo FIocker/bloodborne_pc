@@ -42,6 +42,9 @@ int bbgpu_audio_muted(void);
 /* Button prompts (gpu/shim/bbport_prompts.cpp): what each of the game's key-guide icons shows
  * on keyboard and mouse, one string per icon in bbport_prompt_icons.h's order ("e",
  * "lshift+leftbutton", "w a s d", "mouse", "" for nothing). Draws them; safe from any thread. */
+/* The controller button each key-guide icon's action is bound to (input.ini names, "" for the
+ * game's own), in the same order: the controller prompts follow rebinding. */
+void bbgpu_prompts_configure_pad(const char *const *buttons, int count);
 void bbgpu_prompts_configure(const char *const *inputs, int count);
 
 /* Mouse input accumulated by the window thread since the last call; the call resets the

@@ -55,6 +55,10 @@ void bbgpu_input_configure(int mouse_mode_available, int32_t toggle_scancode, in
     stub_input_configure_toggle=toggle_scancode;
     stub_input_configure_reload=reload_scancode;
 }
+static char stub_pad_prompts[20][16];
+void bbgpu_prompts_configure_pad(const char *const *buttons, int count) {
+    for (int i=0;i<count && i<20;++i) snprintf(stub_pad_prompts[i],sizeof(stub_pad_prompts[i]),"%s",buttons[i]);
+}
 static char stub_prompts[20][128];
 void bbgpu_prompts_configure(const char *const *inputs, int count) {
     for (int i=0;i<count && i<20;++i) snprintf(stub_prompts[i],sizeof(stub_prompts[i]),"%s",inputs[i]);

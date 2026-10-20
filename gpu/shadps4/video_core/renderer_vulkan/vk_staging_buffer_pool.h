@@ -41,7 +41,7 @@ public:
 
     /// Requests size bytes of memory of the given type.
     [[nodiscard]] StagingBufferRef Request(u64 size, VideoCore::MemoryType type, u64 alignment = 0,
-                                           bool deferred = false, bool unsynchronized = false);
+                                           bool deferred = false);
 
     /// Releases a deferred allocation. It becomes reusable once the current tick completes.
     void FreeDeferred(const StagingBufferRef& ref);
@@ -70,11 +70,10 @@ private:
     static constexpr size_t NUM_TYPES = 3;
 
     StagingBufferRef RequestFromRing(Ring& ring, u64 size, u64 alignment,
-                                     VideoCore::MemoryType type, bool unsynchronized);
-    StagingBufferRef RequestLarge(u64 size, VideoCore::MemoryType type, bool deferred,
-                                  bool unsynchronized);
+                                     VideoCore::MemoryType type);
+    StagingBufferRef RequestLarge(u64 size, VideoCore::MemoryType type, bool deferred);
 
-    void TrimRing(Ring& ring);
+    void TrimRing(Ring& ring, u64 keep, u64 idle_frames);
     void TrimLarge(std::vector<LargeBuffer>& cache);
 
     void PublishStats() const;
@@ -84,6 +83,7 @@ private:
 
     std::array<Ring, NUM_TYPES> rings;
     u64 keep_blocks = 0; ///< bbport: ring blocks never trimmed
+    u64 keep_vram_blocks = 0; ///< bbport: the same for the VRAM ring (DeviceLocal)
     std::array<std::vector<LargeBuffer>, NUM_TYPES> large_caches;
     u64 frame = 0;
 };

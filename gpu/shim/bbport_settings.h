@@ -54,6 +54,7 @@ inline constexpr Effect Effects[] = {
     {"tweak_ragdoll", "Dark Souls-style ragdoll physics", false},
     {"tweak_circle_confirm", "Japanese/Asian buttons (Circle confirms)", false},
     {"quit_to_desktop", "Quit to Desktop in the title and System menus", true},
+    {"rebirth", "Rebirth at the Doll (5 Insight)", true},
 };
 inline constexpr int EffectCount = int(sizeof(Effects) / sizeof(Effects[0]));
 /// Live output resolutions: the upscaler's output and the UI host targets, including the named

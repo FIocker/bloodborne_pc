@@ -5,8 +5,8 @@ src/runtime_input_config.c, the authoritative parser this mirrors). Scope: keybo
 button bindings for the plain button/d-pad outputs (BUTTON_OUTPUTS) and the stick half-axes
 (STICK_OUTPUTS, keyboard only -- a mouse button is a press, not an axis), which is what the
 launcher's remap page edits, up to SLOTS per action, plus walk (leftjoystick_halfmode).
-Controller bindings are preserved untouched (round-tripped as unknown lines by save_input_ini),
-not edited here.
+save_input_ini keeps controller lines untouched; the Controller section edits one controller
+button per button action through load_controller_bindings/save_controller_bindings (below).
 """
 import math
 import os
@@ -718,3 +718,100 @@ def _mouse_simple_line(key, value):
     if isinstance(value, str):
         return f'{MOUSE_SIMPLE_LINES[key]} = {value}'
     return f'{MOUSE_SIMPLE_LINES[key]} = {value:.3g}'
+
+
+# ---- Controller bindings (the Controls page's Controller section) ------------------------------
+# Controller buttons a game action can take: runtime_input_config.c's button names and the two
+# triggers. A line "cross = circle" makes the controller's Circle press the game's Cross; each
+# action takes one controller button here (the game keeps four bindings per action: three
+# keyboard and mouse ones and this). Sticks keep their own axis lines, not edited here.
+CONTROLLER_NAMES = ('cross', 'circle', 'square', 'triangle', 'l1', 'r1', 'l2', 'r2', 'l3', 'r3',
+                    'options', 'back', 'pad_up', 'pad_down', 'pad_left', 'pad_right',
+                    'l4', 'r4', 'l5', 'r5')
+# Other names the game accepts for the same buttons: read as the first ones.
+CONTROLLER_ALIASES = {'share': 'back', 'lpaddle_high': 'l4', 'lpaddle_low': 'l5',
+                      'rpaddle_high': 'r4', 'rpaddle_low': 'r5'}
+CONTROLLER_NAMES_SET = set(CONTROLLER_NAMES) | set(CONTROLLER_ALIASES)
+CONTROLLER_OUTPUTS = [o for o in BUTTON_OUTPUTS if o not in
+                      ('strong', 'menu_confirm', 'menu_back', *HOLD_OUTPUTS)]
+# What the game's own input.ini binds (src/runtime_input_config.c DEFAULT_CONTROLLER): every
+# button to itself, the touchpad's left click to Share/View. The touchpad itself always works.
+DEFAULT_CONTROLLER = {**{o: o for o in BUTTON_OUTPUTS if o in CONTROLLER_NAMES},
+                      'touchpad_left': 'back', 'touchpad_right': None}
+
+# How a slot shows a controller button: PlayStation name / Xbox name.
+CONTROLLER_DISPLAY = {
+    'cross': '✕ / A', 'circle': '○ / B', 'square': '□ / X', 'triangle': '△ / Y',
+    'l1': 'L1 / LB', 'r1': 'R1 / RB', 'l2': 'L2 / LT', 'r2': 'R2 / RT', 'l3': 'L3 / LS', 'r3': 'R3 / RS',
+    'options': 'Options / Menu', 'back': 'Share / View',
+    'pad_up': ('D-pad ↑', 'Крестовина ↑'), 'pad_down': ('D-pad ↓', 'Крестовина ↓'),
+    'pad_left': ('D-pad ←', 'Крестовина ←'), 'pad_right': ('D-pad →', 'Крестовина →'),
+    'l4': ('Paddle L4', 'Лепесток L4'), 'r4': ('Paddle R4', 'Лепесток R4'),
+    'l5': ('Paddle L5', 'Лепесток L5'), 'r5': ('Paddle R5', 'Лепесток R5'),
+}
+
+
+def controller_display_name(name, russian=False):
+    shown = CONTROLLER_DISPLAY.get(name, name)
+    return shown[1 if russian else 0] if isinstance(shown, tuple) else shown
+
+
+def _controller_line(raw):
+    """(output, controller name) of an input.ini line binding one controller button to a game
+    button action, else None."""
+    line = ''.join(raw.split())
+    hash_pos = line.find('#')
+    body = line[:hash_pos] if hash_pos >= 0 else line
+    if '=' not in body:
+        return None
+    output, value = (p.split(':')[0] for p in body.split('=', 1))
+    if output in CONTROLLER_OUTPUTS and value in CONTROLLER_NAMES_SET:
+        return output, CONTROLLER_ALIASES.get(value, value)
+    return None
+
+
+def load_controller_bindings(lines):
+    """{output: controller button name or None} for CONTROLLER_OUTPUTS: the first controller line
+    of each (a second one is kept in the file, not shown)."""
+    found = {o: None for o in CONTROLLER_OUTPUTS}
+    seen = set()
+    for raw in lines:
+        hit = _controller_line(raw)
+        if hit and hit[0] not in seen:
+            seen.add(hit[0])
+            found[hit[0]] = hit[1]
+    return found
+
+
+def save_controller_bindings(path, controller, lines):
+    """Writes `controller` ({output: name or None}, the edited outputs only) into input.ini: an
+    output's first controller line is replaced in place (or removed for None), new ones go after
+    the last controller line. Everything else is kept as it is."""
+    written, out, last_controller = set(), [], None
+    for raw in lines:
+        hit = _controller_line(raw)
+        if hit and hit[0] in controller:
+            if hit[0] not in written:
+                written.add(hit[0])
+                if controller[hit[0]]:
+                    out.append(f'{hit[0]} = {controller[hit[0]]}')
+                    last_controller = len(out)
+                continue
+        out.append(raw)
+        if hit:
+            last_controller = len(out)
+    new = [f'{o} = {controller[o]}' for o in CONTROLLER_OUTPUTS
+           if o in controller and o not in written and controller[o]]
+    at = last_controller if last_controller is not None else len(out)
+    out[at:at] = new
+    Path(path).write_text('\n'.join(out) + '\n', encoding='utf-8')
+
+
+def controller_conflicts(controller):
+    """{output: [other outputs on the same controller button]}: both fire on that button."""
+    by_button = {}
+    for output, name in controller.items():
+        if name:
+            by_button.setdefault(name, []).append(output)
+    return {o: [p for p in outputs if p != o] for outputs in by_button.values() if len(outputs) > 1
+            for o in outputs}

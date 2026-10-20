@@ -49,6 +49,9 @@ bool keyboard_ready = false;
 std::array<std::array<Bytes, BbPromptIcons::Count>, BbPromptIcons::PadCount> pad_icons;
 std::array<std::array<Bytes, HudCount>, BbPromptIcons::PadCount> pad_sprites;
 std::set<uintptr_t> searched;      // HUD atlases already looked at
+// Controller rebinding: for each icon, the icon whose button its action is bound to now (-1:
+// its own). From ConfigurePad.
+std::array<int, BbPromptIcons::Count> pad_source{};
 std::atomic<int> device{-1};       // -1 nothing seen yet, else a Device
 std::atomic<bool> dirty{false};    // something to write: a new picture, a device or binding change
 int shown = PlayStation;           // Apply's last decision (window thread): what guest memory has
@@ -131,7 +134,34 @@ void Add(uintptr_t base, int icon, int sprite, Bytes original) {
     dirty = true;
 }
 
+/// The icon that shows a controller button by default ("circle" -> OK), -1 for none (the left
+/// and right d-pad buttons, the paddles).
+int IconShowing(const std::string& button) {
+    using namespace BbPromptIcons;
+    static const std::pair<const char*, Icon> shows[] = {
+        {"cross", Cancel}, {"circle", OK}, {"square", R_L}, {"triangle", R_U}, {"l1", L1},
+        {"r1", R1}, {"l2", L2}, {"r2", R2}, {"l3", L3}, {"r3", R3}, {"options", Start},
+        {"back", TP_L}, {"share", TP_L}, {"pad_up", L_U}, {"pad_down", L_D},
+    };
+    for (const auto& [name, icon] : shows) {
+        if (button == name) return icon;
+    }
+    return -1;
+}
+
 } // namespace
+
+void ConfigurePad(const char* const* buttons, int count) {
+    if (count != BbPromptIcons::Count) return;
+    std::array<int, BbPromptIcons::Count> source;
+    for (int i = 0; i < count; ++i) {
+        const int shows = IconShowing(buttons[i] ? buttons[i] : "");
+        source[i] = shows == i ? -1 : shows;
+    }
+    std::scoped_lock lock{mutex};
+    if (source != pad_source) dirty = true;
+    pad_source = source;
+}
 
 void Configure(const char* const* inputs, int count) {
     static const bool font = BbPromptIcons::SetFont(bb_font_ttf);
@@ -230,10 +260,38 @@ void Apply() {
         if (want == Keyboard) {
             icons = keyboard_icons;
             sprites = keyboard_sprites;
-        } else if (want != PlayStation) {
+        } else {
+            // A controller: each icon as its own button, or the one its action is bound to now.
             const int pad = want == Xbox ? BbPromptIcons::PadXbox : BbPromptIcons::PadSwitch;
-            icons = pad_icons[pad];
-            sprites = pad_sprites[pad];
+            // The game's own picture of a button: an icon found in memory, a sprite of the atlas.
+            auto original_icon = [&](int icon) -> Bytes {
+                for (const Entry& e : entries) {
+                    if (e.sprite < 0 && e.icon == icon) return e.original;
+                }
+                return {};
+            };
+            auto original_sprite = [&](int icon) -> Bytes {
+                for (const Entry& e : entries) {
+                    if (e.sprite >= 0 && BbPromptIcons::HudIcon[e.sprite] == icon) return e.original;
+                }
+                return {};
+            };
+            for (int i = 0; i < BbPromptIcons::Count; ++i) {
+                const int from = pad_source[i] < 0 ? i : pad_source[i];
+                if (want != PlayStation && !pad_icons[pad][from].empty()) icons[i] = pad_icons[pad][from];
+                else if (from != i) icons[i] = original_icon(from);
+            }
+            for (int s = 0; s < HudCount; ++s) {
+                const int own = BbPromptIcons::HudIcon[s], from = pad_source[own] < 0 ? own : pad_source[own];
+                if (want != PlayStation) {
+                    BbPromptIcons::Pixels pixels;
+                    if (from == own) sprites[s] = pad_sprites[pad][s];
+                    else if (BbPromptIcons::DrawPad(BbPromptIcons::Icon(from), BbPromptIcons::Pad(pad), pixels))
+                        sprites[s] = BbPromptIcons::RenderIconArea(pixels, BbPromptIcons::HudAreas[s]);
+                } else if (from != own) {
+                    sprites[s] = original_sprite(from); // empty when the atlas has no such button
+                }
+            }
         }
     }
     // Written without any lock: a write to a page the texture cache protects faults into it.
@@ -268,6 +326,10 @@ void Apply() {
 }
 
 } // namespace BbPrompts
+
+extern "C" void bbgpu_prompts_configure_pad(const char* const* buttons, int count) {
+    BbPrompts::ConfigurePad(buttons, count);
+}
 
 extern "C" void bbgpu_prompts_configure(const char* const* inputs, int count) {
     BbPrompts::Configure(inputs, count);

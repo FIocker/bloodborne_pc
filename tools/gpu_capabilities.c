@@ -64,8 +64,17 @@ static int live_resolution_suits(VkPhysicalDevice device) {
     return suits;
 }
 
+/* --vram: prints "<MiB> <1 if discrete>" for the GPU the game uses (run.py's low-VRAM profile). */
+static void print_vram(VkPhysicalDevice device) {
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(device, &props);
+    printf("%llu %d\n", (unsigned long long)(largest_local_heap(device) >> 20),
+           props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU);
+}
+
 int main(int argc, char **argv) {
     const int live_mode = argc > 1 && !strcmp(argv[1], "--live-resolution");
+    const int vram_mode = argc > 1 && !strcmp(argv[1], "--vram");
     const VkApplicationInfo app = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pApplicationName = "bbport scene scaling probe",
@@ -109,8 +118,9 @@ int main(int argc, char **argv) {
         for (uint32_t i = 1; i < count; ++i)
             if (better_device(devices[i], selected)) selected = devices[i];
     }
-    if (live_mode) {
-        printf("%d\n", live_resolution_suits(selected));
+    if (live_mode || vram_mode) {
+        if (live_mode) printf("%d\n", live_resolution_suits(selected));
+        else print_vram(selected);
         free(devices);
         vkDestroyInstance(instance, NULL);
         return 0;

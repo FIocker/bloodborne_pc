@@ -40,7 +40,7 @@ PATCH_VERSION = '01.09'
 MAX_LOG_LINES = 6000
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 # This build; GitHub release tags are windows-v<VERSION>.
-VERSION = '1.9.2-fork.2026.10.20'
+VERSION = '1.9.2-fork.2026.10.20-pr98'
 COMMUNITY_SERVER = 'https://thehuntersdream.com'
 RELEASES_API = 'https://api.github.com/repos/FIocker/bloodborne_pc/releases/latest'
 RELEASES_PAGE = 'https://github.com/FIocker/bloodborne_pc/releases/latest'
@@ -127,11 +127,16 @@ def run_command():
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bbport_lang  # noqa: E402
 import bbport_trophies as trophies  # noqa: E402
+import bbport_benchmark as benchmark  # noqa: E402
 from bbport_input_config import (STICK_OUTPUTS, OUTPUT_LABELS, ACTION_GROUPS, SLOTS, keysym_to_name,
                                   button_num_to_name, input_ini_path, load_input_ini, reserved_keys,
                                   save_input_ini, save_mouse_settings, wheel_to_name, MAX_COMBO,
                                   MODIFIER_NAMES, apply_layout, slot_conflicts, binding_parts,
-                                  display_name, bbhost_preset_lines, parse_input_lines)  # noqa: E402
+                                  display_name, bbhost_preset_lines, parse_input_lines, CONTROLLER_OUTPUTS, DEFAULT_CONTROLLER,
+                                  controller_conflicts, controller_display_name,
+                                  load_controller_bindings, save_controller_bindings)  # noqa: E402
+import bbport_gamepad  # noqa: E402
+import bbport_respec as respec  # noqa: E402
 
 LANG = 'en'
 
@@ -194,6 +199,8 @@ TWEAKS = [
                               'Японская раскладка: Круг — подтверждение и действие, Крест — уклонение'), False),
     ('quit_to_desktop', ('Quit to Desktop in the title menu and in the System menu',
                          'Пункт «Выйти на рабочий стол» в главном меню и в меню «Система»'), True),
+    ('rebirth', ("Rebirth at the Doll: back to your origin's attributes for 5 Insight, levels regained free",
+                 'Перерождение у Куклы: характеристики происхождения за 5 озарений, уровни возвращаются бесплатно'), True),
 ]
 # Neural rendering (bbport_neural_settings.h): one nr_* key per setting, written to the same
 # bbport.ini the in-game menu edits. Passes past the pass count are ignored by the game.
@@ -267,10 +274,10 @@ APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / 'CUSA03173'
                 'mods_dir': '', 'mods_enabled': True, 'patches_dir': '', 'language': '1',
                 'voice_language': 'auto',
                 'player_name': '', 'fullscreen': False, 'hdr': False, 'present_mode': 'Mailbox',
-                'fps_mode': 'uncap', 'frame_cap': '', 'draw_pipe': '', 'readbacks': '',
+                'fps_mode': 'uncap', 'frame_cap': '', 'draw_pipe': '', 'readbacks': '', 'low_vram': '',
                 'frames_ahead': '', 'frame_stats': False, 'gpu_profile': False,
                 'vk_validation': False, 'extra_env': '', 'close_on_play': False,
-                'check_updates': True, 'online': False, 'online_server': 'srv.shadps4.net:31313',
+                'check_updates': True, 'save_backups': False, 'online': False, 'online_server': 'srv.shadps4.net:31313',
                 'online_webapi': '', 'online_npid': '', 'online_password': '', 'online_upnp': True,
                 'online_community': COMMUNITY_SERVER, 'online_pool': 'shadnet', 'bridge_live_map': False,
                 'supermedo_user': '', 'supermedo_password': '', 'thd_online_id': '', 'thd_token': ''}
@@ -472,6 +479,9 @@ DRAW_PIPE = [('', ('Auto (8+ threads)', 'Авто (8+ потоков)')), ('1', 
              ('0', ('Off (more stable)', 'Выключен (стабильнее)'))]
 READBACKS = [('', ('Relaxed (default)', 'Relaxed (по умолчанию)')), ('0', ('Off', 'Выключены')),
              ('2', ('Precise',))]
+# BB_LOW_VRAM (run.py's low-VRAM profile): '' leaves it to the card's memory.
+LOW_VRAM = [('', ('Auto (4 GB cards)', 'Авто (карты на 4 ГБ)')), ('1', ('On', 'Включён')),
+            ('0', ('Off', 'Выключен'))]
 # Frame cap of the unlocked mode (BB_FPS_LIMIT). '' leaves the port's own: the display refresh,
 # at most 120, because the game's movement timing breaks above about 120 FPS.
 FRAME_CAPS = [('', ('Auto: display refresh, max 120 (recommended)', 'Авто: частота монитора, макс. 120 (рекомендуется)')),
@@ -692,6 +702,8 @@ def game_environment(s, ini=None):
     env['BB_GAME_DIR'] = s['game_dir']
     if s['user_dir']:
         env['BB_USER_DIR'] = s['user_dir']
+    if s.get('save_backups'):
+        env['BB_SAVE_BACKUPS'] = '1'
     if s['dlc_dir']:
         env['BB_DLC_DIR'] = s['dlc_dir']
     env['BB_MODS_DIR'] = s['mods_dir'] or str(DATA_DIR / 'mods')
@@ -710,7 +722,8 @@ def game_environment(s, ini=None):
     env['BB_FPS'] = s['fps_mode']
     if s.get('frame_cap', ''):
         env['BB_FPS_LIMIT'] = s['frame_cap']
-    for key, name in (('draw_pipe', 'BB_DRAW_PIPE'), ('readbacks', 'BB_READBACKS'), ('frames_ahead', 'BB_FRAMES_AHEAD')):
+    for key, name in (('draw_pipe', 'BB_DRAW_PIPE'), ('readbacks', 'BB_READBACKS'), ('frames_ahead', 'BB_FRAMES_AHEAD'),
+                      ('low_vram', 'BB_LOW_VRAM')):
         if s[key]:
             env[name] = s[key]
     for key, name in (('frame_stats', 'BB_FRAME_STATS'), ('gpu_profile', 'BB_GPU_PROFILE'),
@@ -780,6 +793,10 @@ class Launcher:
         # Controls page after a cancelled edit shows what is actually on disk, not a half-edit.
         self.remap_edits = {}
         self.mouse_edited = False  # set by any mouse widget's command/trace; gates the save in collect()
+        # The Controller section: {output: controller button or None}, edits apart as above.
+        self.controller_bindings = load_controller_bindings(self.remap_lines)
+        self.controller_edits = {}
+        self.pads = None  # bbport_gamepad.Pads, opened the first time a controller slot listens
         self.vars = {}
         self.process = self.job = None
         self.hidden = False  # closed while the game runs: it exits with the game
@@ -1163,6 +1180,10 @@ class Launcher:
         ttk.Checkbutton(quick, text=_('Fullscreen', 'Полный экран'), variable=self.var('fullscreen', 'app')).grid(
             row=self.next_row(quick), column=1, sticky='w', pady=(8, 0))
         ttk.Checkbutton(quick, text=_('Play online'), variable=self.var('online', 'app')).grid(
+            row=self.next_row(quick), column=1, sticky='w', pady=(4, 0))
+        ttk.Checkbutton(quick, text=_('Back up saves at start (last 10 kept)',
+                                      'Копировать сохранения при запуске (10 последних)'),
+                        variable=self.var('save_backups', 'app')).grid(
             row=self.next_row(quick), column=1, sticky='w', pady=(4, 0))
         ttk.Button(quick, text=_('Add to Steam'), command=self.add_to_steam).grid(
             row=self.next_row(quick), column=1, sticky='w', pady=(10, 0))
@@ -1574,6 +1595,98 @@ class Launcher:
         control, camera = self.var('cheat_enemy_control', 'ini'), self.var('debug_camera', 'ini')
         control.trace_add('write', lambda *_a: control.get() and camera.set(False))
         camera.trace_add('write', lambda *_a: camera.get() and control.set(False))
+        self.section(f, _('Respec', 'Перераспределение'))
+        holder = self.ttk.Frame(f)
+        self.ttk.Button(holder, text=_('Respec a character…', 'Перераспределить характеристики…'),
+                        command=self.open_respec).pack(side='left')
+        self.row(f, '', holder,
+                 _('Spread a character\'s attribute points again: same level, same Blood Echoes. '
+                   'Changes the save while the game is closed; a copy of the saves is kept in '
+                   'respec-backups beside them.',
+                   'Заново распределить очки характеристик персонажа: тот же уровень и Отголоски '
+                   'крови. Меняет сохранение, пока игра закрыта; копия сохранений остаётся в '
+                   'respec-backups рядом с ними.'))
+
+    def open_respec(self):
+        """The respec dialog (bbport_respec): a character, its six attributes, Apply."""
+        tk, ttk = self.tk, self.ttk
+        title = _('Respec', 'Перераспределение')
+        if self.process:
+            self.messagebox.showinfo(title, _('Close the game first: it would save over the change.',
+                                              'Сначала закройте игру: она запишет сохранение поверх.'))
+            return
+        user = Path(self.var('user_dir', 'app').get() or DATA_DIR / 'user')
+        found = [(folder, slot, who) for folder in respec.save_folders(user)
+                 for slot, who in respec.characters(folder)]
+        if not found:
+            self.messagebox.showinfo(title, _('No characters found in {}.', 'Персонажи не найдены в {}.').format(user))
+            return
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.configure(bg=PANEL)
+        win.transient(self.root)
+        win.resizable(False, False)
+        body = ttk.Frame(win, padding=16)
+        body.pack(fill='both', expand=True)
+        labels = [_('Slot {}: {} (level {})', 'Ячейка {}: {} (уровень {})').format(slot + 1, who['name'] or '—', who['level'])
+                  for _folder, slot, who in found]
+        chosen = tk.StringVar(value=labels[0])
+        ttk.Combobox(body, textvariable=chosen, values=labels, state='readonly', width=36).grid(
+            row=0, column=0, columnspan=2, sticky='w', pady=(0, 10))
+        names = {'vitality': _('Vitality', 'Живучесть'), 'endurance': _('Endurance', 'Выносливость'),
+                 'strength': _('Strength', 'Сила'), 'skill': _('Skill', 'Ловкость'),
+                 'bloodtinge': _('Bloodtinge', 'Кровь'), 'arcane': _('Arcane', 'Тайна')}
+        values = {a: tk.IntVar() for a in respec.ATTRIBUTES}
+        for row, a in enumerate(respec.ATTRIBUTES, start=1):
+            ttk.Label(body, text=names[a]).grid(row=row, column=0, sticky='w', padx=(0, 16), pady=2)
+            ttk.Spinbox(body, from_=respec.FLOORS[a], to=respec.MAX, textvariable=values[a], width=6).grid(
+                row=row, column=1, sticky='w', pady=2)
+        left = ttk.Label(body, style='Muted.TLabel')
+        left.grid(row=8, column=0, columnspan=2, sticky='w', pady=(10, 0))
+        buttons = ttk.Frame(body)
+        buttons.grid(row=9, column=0, columnspan=2, sticky='e', pady=(12, 0))
+
+        def current():
+            return found[labels.index(chosen.get())]
+
+        def load(*_a):
+            for a in respec.ATTRIBUTES:
+                values[a].set(current()[2]['attributes'][a])
+
+        def points(*_a):
+            try:
+                spent = sum(values[a].get() for a in respec.ATTRIBUTES)
+            except tk.TclError:
+                left.configure(text='')
+                return
+            remaining = sum(current()[2]['attributes'].values()) - spent
+            left.configure(text=_('Points to place: {}', 'Осталось распределить: {}').format(remaining) if remaining >= 0
+                           else _('{} points too many', 'Лишних очков: {}').format(-remaining))
+            apply.state(['!disabled'] if remaining == 0 else ['disabled'])
+
+        def save():
+            folder, slot, who = current()
+            try:
+                new = {a: values[a].get() for a in respec.ATTRIBUTES}
+                backup = respec.respec(folder, slot, new)
+            except (ValueError, OSError, tk.TclError) as error:
+                self.messagebox.showerror(title, str(error), parent=win)
+                return
+            who['attributes'] = new
+            self.messagebox.showinfo(title, _('Done. A copy of the saves from before is in {}.',
+                                              'Готово. Копия прежних сохранений: {}.').format(backup.parent),
+                                     parent=win)
+            win.destroy()
+
+        ttk.Button(buttons, text=_('Reset', 'Сбросить'), command=load).pack(side='left', padx=(0, 8))
+        apply = ttk.Button(buttons, text=_('Apply', 'Применить'), command=save)
+        apply.pack(side='left')
+        chosen.trace_add('write', load)
+        for var in values.values():
+            var.trace_add('write', points)
+        load()
+        points()
+        win.grab_set()
 
     def build_online(self):
         ttk = self.ttk
@@ -1964,12 +2077,10 @@ class Launcher:
     def build_controls(self):
         ttk, tk = self.ttk, self.tk
         f = self.scrolled_page('controls', _('Controls', 'Управление'),
-                               _('Keyboard and mouse bindings, up to three per action. The '
-                                 'controller keeps working side by side; edit its lines in '
-                                 'input.ini directly — see docs/INPUT.md.',
-                                 'Раскладка клавиатуры и мыши, до трёх привязок на действие. '
-                                 'Геймпад продолжает работать одновременно; его строки можно '
-                                 'настроить только в input.ini — см. docs/INPUT.md.'))
+                               _('Keyboard and mouse bindings, up to three per action, and the '
+                                 'controller\'s buttons below. Both work side by side.',
+                                 'Раскладка клавиатуры и мыши, до трёх привязок на действие, и '
+                                 'кнопки геймпада ниже. Работают одновременно.'))
         self.remap_rows = {}  # output -> ([slot buttons], conflict label)
         self.remap_listening = False
         self.mouse_vars = {}  # mouse_settings key -> its widget's variable (apply_layout_preset)
@@ -2041,6 +2152,8 @@ class Launcher:
                        'Зарезервированы: Insert/Escape (меню порта), F9 (запись маршрута), а '
                        'также клавиши переключения мыши и перезагрузки input.ini (по умолчанию '
                        'F7/F8).'))
+
+        self.build_controller_bindings(f)
 
         self.section(f, _('Mouse look', 'Обзор мышью'))
         ms = self.mouse_settings
@@ -2149,6 +2262,110 @@ class Launcher:
                        'reload input.ini without restarting.',
                        'Изменения применяются при следующем запуске игры, либо нажмите F8 в '
                        'игре, чтобы перечитать input.ini без перезапуска.'), top=6)
+
+    def build_controller_bindings(self, f):
+        """The Controller section: one controller button per game action, chosen by pressing it."""
+        ttk = self.ttk
+        self.section(f, _('Controller', 'Геймпад'))
+        self.note(f, _('Click a slot, then press the controller button for that action; Esc cancels. '
+                       'Right-click a slot to put back its default. A button on two actions presses '
+                       'both. The sticks always move and turn the camera.',
+                       'Щёлкните ячейку и нажмите кнопку геймпада для этого действия; Esc отменяет. '
+                       'Правый клик возвращает кнопку по умолчанию. Кнопка на двух действиях нажимает '
+                       'оба. Стики всегда отвечают за движение и камеру.'), top=2)
+        table = ttk.Frame(f)
+        table.grid(row=self.next_row(f), column=0, columnspan=2, sticky='w')
+        table.columnconfigure(1, minsize=self.px(150))
+        self.controller_rows = {}
+        self.controller_listening = False
+        for (group, group_ru), actions in ACTION_GROUPS:
+            outputs = [(o, label) for o, label in actions if o in CONTROLLER_OUTPUTS]
+            if not outputs:
+                continue
+            ttk.Label(table, text=_(group, group_ru), style='Section.TLabel').grid(
+                row=table.grid_size()[1], column=0, columnspan=3, sticky='w', pady=(14, 4))
+            for output, (label, label_ru) in outputs:
+                r = table.grid_size()[1]
+                ttk.Label(table, text=_(label, label_ru)).grid(row=r, column=0, sticky='w', padx=(0, 18), pady=2)
+                btn = ttk.Button(table, style='Slot.TButton', command=lambda o=output: self.start_controller_capture(o))
+                btn.grid(row=r, column=1, sticky='ew', padx=2, pady=2)
+                btn.bind('<Button-3>', lambda _e, o=output: self.set_controller(o, DEFAULT_CONTROLLER.get(o)))
+                warn = ttk.Label(table, style='Muted.TLabel')
+                warn.grid(row=r, column=2, sticky='w', padx=(8, 0))
+                self.controller_rows[output] = (btn, warn)
+        reset = ttk.Frame(f)
+        ttk.Button(reset, text=_('Reset controller buttons', 'Сбросить кнопки геймпада'),
+                   command=lambda: [self.set_controller(o, DEFAULT_CONTROLLER.get(o)) for o in CONTROLLER_OUTPUTS]
+                   ).pack(side='left')
+        self.row(f, '', reset)
+        self.refresh_controller_rows()
+
+    def current_controller(self, output):
+        return self.controller_edits.get(output, self.controller_bindings.get(output))
+
+    def refresh_controller_rows(self):
+        current = {o: self.current_controller(o) for o in self.controller_rows}
+        conflicts = controller_conflicts(current)
+        for output, (btn, warn) in self.controller_rows.items():
+            name = current[output]
+            text = controller_display_name(name, LANG == 'ru') if name else '—'
+            btn.configure(text=text + ('  ⚠' if output in conflicts else ''), style='Slot.TButton')
+            others = conflicts.get(output, [])
+            warn.configure(text='⚠ ' + _('also {}', 'также {}').format(
+                ', '.join(_(*OUTPUT_LABELS[o]) for o in others)) if others else '')
+
+    def set_controller(self, output, name):
+        if self.controller_listening:
+            return
+        self.controller_edits[output] = name
+        self.refresh_controller_rows()
+
+    def start_controller_capture(self, output):
+        """Waits for a controller button (read through the game's SDL3, bbport_gamepad) and binds
+        it to `output`. Buttons already held when it starts count only once released and pressed
+        again. Esc, or 10 seconds without a press, cancels."""
+        if self.controller_listening:
+            return
+        if self.pads is None:
+            self.pads = bbport_gamepad.Pads(PORT_DIR)
+        if not self.pads.connected():
+            self.messagebox.showwarning(
+                _('Controller', 'Геймпад'),
+                _('No controller found. Connect one, then click the slot again.',
+                  'Геймпад не найден. Подключите его и снова щёлкните ячейку.') +
+                (f'\n\n{self.pads.problem}' if self.pads.problem else ''))
+            return
+        self.controller_listening = True
+        btn = self.controller_rows[output][0]
+        for other, _warn in self.controller_rows.values():
+            other.state(['disabled'])
+        btn.configure(text=_('Press a button…', 'Нажмите кнопку…'), style='Listen.TButton')
+        ignored = set(self.pads.pressed())
+        deadline = time.monotonic() + 10
+
+        def finish(name=None):
+            self.root.unbind_all('<KeyPress-Escape>')
+            for other, _warn in self.controller_rows.values():
+                other.state(['!disabled'])
+            self.controller_listening = False
+            if name:
+                self.controller_edits[output] = name
+            self.refresh_controller_rows()
+
+        def poll():
+            if not self.controller_listening:
+                return
+            held = self.pads.pressed()
+            ignored.intersection_update(held)  # released: counts again
+            new = sorted(held - ignored)
+            if new:
+                finish(new[0])
+            elif time.monotonic() > deadline:
+                finish()
+            else:
+                self.root.after(15, poll)
+        self.root.bind_all('<KeyPress-Escape>', lambda _e: finish())
+        self.root.after(15, poll)
 
     def apply_layout_preset(self):
         """Writes the Dark Souls III layout into input.ini now (bbport_input_config.apply_layout)
@@ -2353,6 +2570,8 @@ class Launcher:
         holder = ttk.Frame(f)
         holder.grid(row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(10, 0))
         ttk.Button(holder, text=_('Clear shader cache', 'Очистить кэш шейдеров'), command=self.clear_cache).pack(side='left')
+        ttk.Button(holder, text=_('Run benchmark…', 'Запустить тест…'), command=self.run_benchmark).pack(
+            side='left', padx=(6, 0))
         ttk.Label(holder, text=_('If the game only shows a black screen, this usually helps.',
                                  'Если игра показывает только чёрный экран, обычно это помогает.'),
                   style='Muted.TLabel').pack(side='left', padx=10)
@@ -2362,6 +2581,15 @@ class Launcher:
         self.row(f, _('GPU readbacks', 'Чтение данных GPU'), self.choice(f, 'readbacks', 'app', READBACKS),
                  _('How exactly data the GPU writes is copied back for the game.',
                    'Насколько точно данные, записанные GPU, возвращаются игре.'))
+        self.row(f, _('Low-VRAM profile', 'Профиль для малого объёма видеопамяти'),
+                 self.choice(f, 'low_vram', 'app', LOW_VRAM),
+                 _('A larger texture budget and, at 1080p with an upscaler, a smaller scene from the start '
+                   '(preset changes then need a restart).',
+                   'Больший бюджет текстур и, при 1080p с апскейлером, уменьшенная сцена с запуска '
+                   '(смена пресета тогда требует перезапуска).'))
+        ttk.Label(f, text=_('Low-VRAM profile by fixdag and bashiku.',
+                            'Профиль для малого объёма видеопамяти: fixdag и bashiku.'),
+                  style='Muted.TLabel').grid(row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(8, 0))
         self.section(f, _('Diagnostics', 'Для разработчика'))
         self.check(f, 'frame_stats', 'app', _('Frame statistics in the log (every 5 s)', 'Статистика кадров в журнале (раз в 5 с)'))
         self.check(f, 'gpu_profile', 'app', _('GPU time per pass in the log', 'Профиль GPU в журнале'))
@@ -2593,6 +2821,14 @@ class Launcher:
             self.remap_edits = {}
             if getattr(self, 'remap_rows', None):
                 self.refresh_remap_row(None)  # emptied slots close up, as the file has them
+        if self.controller_edits:
+            save_controller_bindings(self.remap_ini_path, self.controller_edits, self.remap_lines)
+            self.remap_bindings, self.remap_lines, self.remap_toggle_key, self.remap_reload_key, \
+                reloaded_mouse = load_input_ini(self.remap_ini_path)
+            if not self.mouse_edited:
+                self.mouse_settings.update(reloaded_mouse)
+            self.controller_bindings = load_controller_bindings(self.remap_lines)
+            self.controller_edits = {}
         if self.mouse_edited:
             save_mouse_settings(self.remap_ini_path, self.mouse_settings, self.remap_lines)
             self.remap_bindings, self.remap_lines, self.remap_toggle_key, self.remap_reload_key, \
@@ -2685,9 +2921,18 @@ class Launcher:
                 warned = True
                 self.ui_calls.put(lambda: self.messagebox.showwarning('Bloodborne', _(
                     "Your eboot.bin is not the clean 1.09 one (modified, or from another dump). The port "
-                    "cannot patch it: the game runs at 30 FPS, the Game & effects options do nothing, and "
-                    "some scenes (like the cutscene after Rom) can freeze.\n\nReplace eboot.bin with the one "
-                    "from an unmodified 1.09 update.")))
+                    "cannot patch it: the game runs at 30 FPS in 16:9 (ultrawide and the output resolution "
+                    "do not apply), the Game & effects options do nothing, and some scenes (like the "
+                    "cutscene after Rom) can freeze.\n\nReplace eboot.bin with the one from an unmodified "
+                    "1.09 update.")))
+            elif not warned and 'eboot.bin is modified, not the clean 01.09 build' in text:
+                # Some patch groups still apply (run.py): the line says which are off.
+                warned = True
+                detail = text.split(': ', 1)[-1].strip()
+                self.ui_calls.put(lambda: self.messagebox.showwarning('Bloodborne', _(
+                    "Your eboot.bin has been modified (for example with a 60 FPS patch already applied). "
+                    "Part of the port's patches cannot be used with it:\n\n{}\n\nFor every option, "
+                    "replace eboot.bin with the one from an unmodified 1.09 update.").format(detail)))
             if log:
                 log.write(text.replace('\r\n', '\n'))
         if log:
@@ -2971,6 +3216,74 @@ class Launcher:
             self.ui_calls.put(lambda: show(versions))
         threading.Thread(target=fetch, daemon=True).start()
 
+    def run_benchmark(self):
+        """Advanced > Run benchmark (bbport_benchmark.py): a fixed route on a fixed save with the
+        player's settings; the results zip is shown in Explorer."""
+        if self.process or getattr(self, 'benchmark_run', None):
+            return
+        self.collect()
+        if not game_info(self.app['game_dir']):
+            self.messagebox.showerror('Bloodborne', _('Choose the game folder with eboot.bin (CUSA03173).',
+                                                      'Выберите папку игры с eboot.bin (CUSA03173).'))
+            self.show('game')
+            return
+        if not self.messagebox.askokcancel('Bloodborne', _(
+                'The benchmark plays a fixed route in Cathedral Ward on its own save with your graphics '
+                'settings (offline, frame rate uncapped). It takes about 4 minutes.\n\nDo not touch the '
+                'mouse, keyboard or controller while it runs. Your own save is put aside and comes back '
+                'afterwards.\n\nThe results (a zip to send) open in Explorer at the end.',
+                'Тест проходит один и тот же маршрут в Соборном округе на своём сохранении с вашими '
+                'настройками графики (офлайн, без ограничения FPS). Займёт около 4 минут.\n\nНе трогайте '
+                'мышь, клавиатуру и геймпад во время теста. Ваше сохранение будет отложено и вернётся '
+                'после.\n\nРезультаты (zip для отправки) откроются в Проводнике.')):
+            return
+        tk, ttk = self.tk, self.ttk
+        window = tk.Toplevel(self.root)
+        window.title(_('Benchmark', 'Тест'))
+        window.configure(bg=BG)
+        window.transient(self.root)
+        window.resizable(False, False)
+        frame = ttk.Frame(window, padding=self.px(16))
+        frame.pack(fill='both', expand=True)
+        status = ttk.Label(frame, text=_('Starting…', 'Запуск…'), wraplength=self.px(380), justify='left')
+        status.pack(anchor='w')
+        user_dir = Path(self.app.get('user_dir') or DATA_DIR / 'user')
+        run = benchmark.Run(PORT_DIR, DATA_DIR, user_dir, game_environment(self.app), run_command(),
+                            progress=lambda text: self.ui_calls.put(
+                                lambda: window.winfo_exists() and status.configure(text=text)))
+        self.benchmark_run = run
+        ttk.Button(frame, text=_('Cancel', 'Отмена'), command=run.cancel).pack(anchor='w', pady=(12, 0))
+        window.protocol('WM_DELETE_WINDOW', run.cancel)
+        self.play_button.configure(state='disabled')
+
+        def done(archive, error):
+            self.benchmark_run = None
+            self.play_button.configure(state='normal')
+            if window.winfo_exists():
+                window.destroy()
+            if archive:
+                subprocess.Popen(['explorer', '/select,', str(archive)])
+                summary = archive.with_suffix('') / 'summary.txt'
+                text = summary.read_text(encoding='utf-8') if summary.is_file() else ''
+                self.messagebox.showinfo('Bloodborne', _('Benchmark finished. Send this file: {}',
+                                                         'Тест завершён. Отправьте этот файл: {}').format(
+                    archive.name) + '\n\n' + text.split('Results', 1)[-1][:900])
+            elif error:
+                self.messagebox.showerror('Bloodborne', _('The benchmark stopped: {}',
+                                                          'Тест остановлен: {}').format(error))
+
+        def work():
+            archive = error = None
+            try:
+                archive = run.run()
+            except benchmark.Cancelled:
+                pass
+            except Exception as failure:  # shown to the player; the save is restored either way
+                error = failure
+            self.ui_calls.put(lambda: done(archive, error))
+
+        threading.Thread(target=work, daemon=True).start()
+
     def clear_cache(self):
         """Shader and pipeline caches; they are rebuilt while playing."""
         if self.process:
@@ -3102,6 +3415,22 @@ def play_without_window(settings):
         return process.wait()
 
 
+def benchmark_without_window(settings):
+    """--benchmark: Advanced > Run benchmark without the window; prints the progress and the zip."""
+    attach_stdio()
+    user_dir = Path(settings.get('user_dir') or DATA_DIR / 'user')
+    run = benchmark.Run(PORT_DIR, DATA_DIR, user_dir, game_environment(settings), run_command(),
+                        progress=lambda text: print(text, flush=True))
+    try:
+        archive = run.run()
+    except Exception as error:
+        print(f'Benchmark stopped: {error}', flush=True)
+        return 1
+    print(f'Results: {archive}', flush=True)
+    print((archive.with_suffix('') / 'summary.txt').read_text(encoding='utf-8'), flush=True)
+    return 0
+
+
 def version_tuple(text):
     return tuple(int(number) for number in re.findall(r'\d+', text or ''))
 
@@ -3176,6 +3505,13 @@ def main():
     LANG = settings.get('ui_language') or windows_language()
     if args[:1] == ['--install-update'] and len(args) == 3:
         sys.exit(install_update(args[1], args[2]))
+    # A benchmark that did not finish (closed launcher, crash) left its save in place of the player's.
+    try:
+        benchmark.restore_save(Path(settings.get('user_dir') or DATA_DIR / 'user'))
+    except OSError:
+        pass
+    if args[:1] == ['--benchmark']:
+        sys.exit(benchmark_without_window(settings))
     if FROZEN and UPDATE_DIR not in PORT_DIR.parents:
         shutil.rmtree(UPDATE_DIR, ignore_errors=True)  # what a finished update left behind
     # Without a usable game folder there is nothing to play yet: open the launcher instead.

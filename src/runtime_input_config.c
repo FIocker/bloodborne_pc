@@ -190,6 +190,17 @@ int input_binding_keyboard_text(const InputBinding *b, char *out, size_t size) {
     return 1;
 }
 
+const char *input_binding_controller_name(const InputBinding *b) {
+    if (b->extra_count) return NULL;
+    if (b->kind == IN_CBUTTON) {
+        for (size_t i = 0; i < sizeof(kCButtonNames) / sizeof(kCButtonNames[0]); ++i)
+            if (kCButtonNames[i].value == b->value) return kCButtonNames[i].name;
+    }
+    if (b->kind == IN_AXIS && b->value == SDL_GAMEPAD_AXIS_LEFT_TRIGGER) return "l2";
+    if (b->kind == IN_AXIS && b->value == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) return "r2";
+    return NULL;
+}
+
 /* ---- Binding resolution for one input token ------------------------------------------ */
 
 static int ResolveInput(const char *token, InputBinding *out) {

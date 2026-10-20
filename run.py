@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 PORT = Path(__file__).resolve().parent
 
@@ -85,10 +86,9 @@ def hunters_dream(env, user_dir):
 LANCE_60FPS_IMAGE = 'bbc91f4dff6bc3118b039464289e39878a8fdfc802a07fab9d5fe84d935a676f'
 
 
-def image_sha256(game):
-    """The SHA-256 of eboot.bin's loaded image (its loadable segments at their addresses): the
-    same whatever tool dumped it, unlike the SELF around it."""
-    import hashlib
+def eboot_image(game):
+    """eboot.bin's loaded image (its loadable segments at their addresses): the same whatever
+    tool dumped it, unlike the SELF around it."""
     sys.path.insert(0, str(PORT / 'scripts'))
     from prepare import parse_self, span
     elf, _header, ph, _segments, _missing = parse_self((Path(game) / 'eboot.bin').read_bytes())
@@ -96,7 +96,12 @@ def image_sha256(game):
     image = bytearray(max(p['vaddr'] + p['memsz'] for p in loads))
     for p in loads:
         image[p['vaddr']:p['vaddr'] + p['filesz']] = span(elf, p['offset'], p['filesz'])
-    return hashlib.sha256(image).hexdigest()
+    return image
+
+
+def image_sha256(game):
+    import hashlib
+    return hashlib.sha256(eboot_image(game)).hexdigest()
 
 
 def fail(message):
@@ -144,6 +149,15 @@ def run_script(name, *args, capture=False, optional=False):
     return None
 
 
+def auto_live_blurs_dof(output, config):
+    """live_resolution=auto keeps the startup patch for outputs above 1080p with depth of field on:
+    the live path renders such scenes into host targets larger than the guest's 1920x1080, and
+    the game's depth of field composite, built for its own half-resolution targets, blurs them
+    (Native at 4K came out softer than Performance)."""
+    width, height = (int(v) for v in output.split('x'))
+    return (width > 1920 or height > 1080) and ini_value(config, 'effect_dof') != '0'
+
+
 def ini_value(path, key):
     try:
         for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
@@ -163,9 +177,110 @@ def find_executable(name):
     return None
 
 
+# Low-VRAM profile (from a player's 4 GB mod; measured on an RTX 3050 Ti Laptop, i5-11300H, Central
+# Yharnam, 1080p output with an upscaler): the texture cache's own marks had it evict and upload
+# again ~30 textures a second with 2.7 GB in use, and the live path's native-size game targets
+# cost ~700 MiB more than the startup patch (2.8 GB at 640x360 against 2.1 GB at 960x540).
+# Discrete GPUs up to LOW_VRAM_MB; BB_LOW_VRAM=1 forces the profile, 0 turns it off.
+LOW_VRAM_MB = 4608
+# Left to the desktop, browsers and the driver.
+VRAM_RESERVE_MB = 600
+
+
+def low_vram_mb(env, caps):
+    """The card's memory in MiB when the low-VRAM profile applies, else 0. caps is
+    bb-gpu-capabilities, which picks the GPU the game uses (BB_GPU_ID included)."""
+    setting = env.get('BB_LOW_VRAM', '')
+    if setting == '0':
+        return 0
+    vram, discrete = 0, False
+    try:
+        result = subprocess.run([str(caps), '--vram'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, text=True, timeout=20, creationflags=no_console())
+        size, kind = result.stdout.split()
+        vram, discrete = int(size), kind == '1'
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    if setting == '1':
+        return vram or 4096
+    # Integrated GPUs follow the driver's budget already (texture_cache.cpp).
+    return vram if discrete and 0 < vram <= LOW_VRAM_MB else 0
+
+
+def physical_cores():
+    """CPU cores, not threads (GetLogicalProcessorInformation); os.cpu_count() when unknown."""
+    try:
+        from ctypes import wintypes
+        size = wintypes.DWORD(0)
+        ctypes.windll.kernel32.GetLogicalProcessorInformation(None, ctypes.byref(size))
+        buffer = ctypes.create_string_buffer(size.value)
+        if not ctypes.windll.kernel32.GetLogicalProcessorInformation(buffer, ctypes.byref(size)):
+            raise OSError
+        # SYSTEM_LOGICAL_PROCESSOR_INFORMATION: ULONG_PTR mask, then the relationship (0 = a core).
+        entry = ctypes.sizeof(ctypes.c_void_p) * 2 + 16
+        cores = sum(1 for offset in range(0, size.value - entry + 1, entry)
+                    if int.from_bytes(buffer.raw[offset + ctypes.sizeof(ctypes.c_void_p):][:4], 'little') == 0)
+        if cores:
+            return cores
+    except (AttributeError, OSError):
+        pass
+    return os.cpu_count() or 8
+
+
+def thermal_watch(stop):
+    """BB_THERMAL_LOG=1 (debugging): notes in the log when the NVIDIA driver starts or stops
+    slowing the card down to cool it (nvidia-smi's thermal slowdown reasons), checked every 20 s.
+    On a laptop that is what a frame rate falling after some minutes of play usually is."""
+    smi = shutil.which('nvidia-smi') or str(Path(os.environ.get('SystemRoot', r'C:\Windows'))
+                                            / 'System32' / 'nvidia-smi.exe')
+    if not Path(smi).is_file():
+        print('Thermal: no nvidia-smi (NVIDIA only)', flush=True)
+        return
+    slowed = None
+    while not stop.wait(20):
+        try:
+            line = subprocess.run([smi, '--query-gpu=temperature.gpu,power.draw,clocks_throttle_reasons.active',
+                                   '--format=csv,noheader,nounits'], stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.PIPE, text=True, timeout=10,
+                                  creationflags=no_console()).stdout.splitlines()[0]
+            temperature, watts, reasons = (value.strip() for value in line.split(','))
+            now = bool(int(reasons, 16) & 0x60)  # software or hardware thermal slowdown
+        except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+            return
+        if now != slowed:
+            slowed = now
+            print(f'Thermal: GPU {temperature} C, {watts} W: '
+                  + ('the driver is slowing the card down to cool it' if now else 'no thermal limit'), flush=True)
+
+
+SAVE_BACKUPS_KEPT = 10
+
+
+def backup_saves(user_dir, keep=SAVE_BACKUPS_KEPT, now=None):
+    """BB_SAVE_BACKUPS=1 (launcher: Play page, "Back up saves at start"): a copy of the saves
+    in <user>/save-backups/<time>/savedata before the game starts, the newest `keep` kept.
+    A failed copy is reported and the game starts anyway. Returns the copy, or None."""
+    saves = Path(user_dir) / 'savedata'
+    if not saves.is_dir() or not any(saves.rglob('userdata*')):
+        return None
+    root = Path(user_dir) / 'save-backups'
+    target = root / time.strftime('%Y%m%d-%H%M%S', time.localtime(now)) / 'savedata'
+    try:
+        if not target.exists():
+            shutil.copytree(saves, target)
+        for old in sorted(p for p in root.iterdir() if p.is_dir())[:-keep]:
+            shutil.rmtree(old, ignore_errors=True)
+    except OSError as error:
+        print(f'Save backup: {error}; the game starts without one')
+        return None
+    print(f'Save backup: {target.parent}')
+    return target
+
+
 def main():
     args = sys.argv[1:]
-    if len(args) >= 2 and args[0] == '--after':
+    restarted = len(args) >= 2 and args[0] == '--after'
+    if restarted:
         wait_for(int(args[1]))
         args = args[2:]
     # As run.sh: relative paths (BB_GAME_DIR, BB_DATA_DIR, fsr4_shaders/) are from the port.
@@ -210,7 +325,30 @@ def main():
                  'from a clean dump of the 1.09 update into the game folder, replacing this one. '
                  'BB_SKIP_GAME_CHECK=1 starts it anyway.')
     sys.path.insert(0, str(PORT / 'scripts'))
-    from patches import OUTPUT_SIZE, game_app_version, hud_canvas, output_size, read_settings
+    from patches import (OUTPUT_SIZE, PATCH_GROUPS, game_app_version, group_list, hud_canvas,
+                         image_groups, output_size, read_settings)
+    # Patches exist for game version 01.09 only (patches.py applies none to others): other
+    # versions keep the game's 30 FPS timing and change resolutions live. Of a 01.09 eboot.bin,
+    # only the groups of patches whose code is the 01.09 build's are applied (patches.py
+    # PATCH_GROUPS): checked here, before the HUD layout below, which needs the resolution group.
+    version = game_app_version(game)
+    if env.get('BB_FORCE_PATCHES'):
+        groups = set(PATCH_GROUPS)
+    elif version not in (None, '01.09'):
+        groups = set()
+        print(f'Game version {version}: community patches need 01.09; 30 FPS, no effect patches')
+    else:
+        try:
+            groups = image_groups(eboot_image(game))
+        except (OSError, ValueError, KeyError, IndexError):
+            groups = set()  # prepare.py reports unreadable executables itself
+        if not groups:
+            print('Game files: eboot.bin is not the 01.09 build the community patches were made for; '
+                  '30 FPS, no effect patches, no ultrawide or output resolution patch')
+        elif groups != set(PATCH_GROUPS):
+            print(f'Game files: eboot.bin is modified, not the clean 01.09 build: its '
+                  f'{group_list(set(PATCH_GROUPS) - groups)} code differs, so those options are off; '
+                  f'{group_list(groups)} work')
     # Quit to Desktop (bbport.ini quit_to_desktop, patches.py): the entries' names in the menu
     # texts of every language and six-row title and System menus, also a layer below the mods
     # (before the ultrawide one, which builds on its menu movies).
@@ -223,14 +361,23 @@ def main():
             shutil.rmtree(text_layer, ignore_errors=True)
             env['BB_QUIT_TO_DESKTOP'] = '0'  # patches.py: no menu entries without their texts
             print('Quit to Desktop: its menu texts could not be written; the game starts without it')
+    # Rebirth at the Doll (bbport.ini rebirth, patches.py): the Doll's talk script and its texts
+    # (on top of Quit to Desktop's, which edit the same menu text archives), a layer below the mods.
+    rebirth_layer = out / 'rebirth'
+    shutil.rmtree(rebirth_layer, ignore_errors=True)
+    if ini_value(config, 'rebirth') != '0' and (game_app_version(game) in (None, '01.09') or env.get('BB_FORCE_PATCHES')):
+        if not run_script('rebirth.py', game, '--out', rebirth_layer, '--source', text_layer, optional=True):
+            shutil.rmtree(rebirth_layer, ignore_errors=True)
+            env['BB_REBIRTH'] = '0'  # patches.py: no eboot hooks without the Doll's script
+            print("Rebirth: the Doll's script could not be written; the game starts without it")
     # Ultrawide outputs: the menu movies with full-screen backdrops widened and the HUD's corner
     # groups toward the screen edges (bbport.ini hud_position, 0 centred .. 100 edges), a layer
-    # below the mods. Only for the
-    # 01.09 game, whose camera and HUD canvas the patches widen (patches.py hud_canvas).
+    # below the mods. Only with the resolution patches, which widen the camera and HUD canvas
+    # (patches.py hud_canvas): without them the widened menus showed stretched on a 16:9 game.
     hud_layer = out / 'hud_layout'
     shutil.rmtree(hud_layer, ignore_errors=True)
     canvas = hud_canvas(output_size(read_settings(Path(config))))
-    if canvas != OUTPUT_SIZE and (game_app_version(game) in (None, '01.09') or env.get('BB_FORCE_PATCHES')):
+    if canvas != OUTPUT_SIZE and 'resolution' in groups:
         position = (ini_value(config, 'hud_position') or '0').strip()
         if not run_script('hud_layout.py', game, '--out', hud_layer, '--canvas-width', canvas[0],
                           '--position', max(0, min(100, int(position) if position.isdigit() else 100)) / 100,
@@ -251,14 +398,15 @@ def main():
     mod_args = [game, '--out', out, '--mods-dir', env.get('BB_MODS_DIR', data / 'mods'),
                 '--config', env.get('BB_MODS_CONFIG', data / 'mods.json'),
                 '--enabled', env.get('BB_MODS_ENABLED', '1')]
-    view = run_script('mods.py', *mod_args, '--layer', text_layer, '--layer', hud_layer, '--layer', fov_layer,
-                      capture=True, optional=True)
+    view = run_script('mods.py', *mod_args, '--layer', text_layer, '--layer', rebirth_layer, '--layer', hud_layer,
+                      '--layer', fov_layer, capture=True, optional=True)
     if view is None:
         # The game view could not be made with the port's own layers (Quit to Desktop's texts,
         # the HUD layout); without them the game still starts, as it did before they existed.
         print('Mods: the game view could not be made; starting without Quit to Desktop and the '
               'HUD layout')
         env['BB_QUIT_TO_DESKTOP'] = '0'
+        env['BB_REBIRTH'] = '0'
         view = run_script('mods.py', *mod_args, capture=True)
     game = Path(view.strip())
     mod_view = game if game.resolve() != original_game else None
@@ -286,25 +434,14 @@ def main():
             env.pop('BB_CPU_COMPAT', None)
         run_script('content_profile.py', game, '--out', out, '--sku', env.get('BB_CONTENT_SKU', 'full'))
 
-        # Patches exist for game version 01.09 only (patches.py applies none to others): other
-        # versions keep the game's 30 FPS timing and change resolutions live.
-        sys.path.insert(0, str(PORT / 'scripts'))
-        from patches import eboot_matches_patches, game_app_version
-        version = game_app_version(game)
-        forced = bool(env.get('BB_FORCE_PATCHES'))
-        patched = version in (None, '01.09') or forced
-        if not patched:
-            print(f'Game version {version}: community patches need 01.09; 30 FPS, no effect patches')
-        elif not forced and not eboot_matches_patches(out / 'eboot.elf'):
-            # param.sfo says 01.09, the code is another build's: the patches would break it.
-            patched = False
-            print('Game files: eboot.bin is not the 01.09 build the community patches were made for; '
-                  '30 FPS, no effect patches')
+        # The groups checked above: the frame rate needs the FPS patches, the startup resolution
+        # and ultrawide the resolution ones.
+        patched = 'resolution' in groups
         # Sizes chosen below for the previous launch are recomputed after an in-game restart.
         if env.get('BB_AUTO_RENDER_RES') == '1':
             for key in ('BB_RENDER_RES', 'BB_OUTPUT_RES', 'BB_AUTO_RENDER_RES'):
                 env.pop(key, None)
-        fps = env.get('BB_FPS', 'uncap') if patched else '30'
+        fps = env.get('BB_FPS', 'uncap') if 'fps' in groups else '30'
         scaled_render = scaled_output = None
         if not env.get('BB_RENDER_RES'):
             printed = run_script('patches.py', '--print-scaled', '--settings', config, capture=True).split()
@@ -313,6 +450,10 @@ def main():
         live = '0'
         if scaled_output:
             live = env.get('BB_LIVE_RES') or ini_value(config, 'live_resolution') or '0'
+            if live == 'auto' and auto_live_blurs_dof(scaled_output, config):
+                live = '0'
+                print(f'Output {scaled_output}: live resolution auto: startup patch (depth of field '
+                      'blurs live scenes above 1080p; live_resolution=1 forces live changes)')
             if live == 'auto':
                 caps = probe.parent / 'bb-gpu-capabilities.exe'
                 result = subprocess.run([str(caps), '--live-resolution'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -337,6 +478,26 @@ def main():
             env.setdefault('BB_DMEM_MB', '9152')
             print(f'Output {scaled_output}: scene {scaled_render}, direct memory {env["BB_DMEM_MB"]} MiB '
                   '(live_resolution=1: live changes)')
+        vram = low_vram_mb(env, probe.parent / 'bb-gpu-capabilities.exe')
+        if vram:
+            env.setdefault('BB_GC_BUDGET_MB', str(max(2048, vram - VRAM_RESERVE_MB)))
+            notes = [f'texture budget {env["BB_GC_BUDGET_MB"]} MiB']
+            # At 1080p output the live path keeps the game's targets native; here they shrink too.
+            wants_live = (env.get('BB_LIVE_RES') or ini_value(config, 'live_resolution')) == '1'
+            if (patched and not scaled_output and not env.get('BB_RENDER_RES') and not wants_live
+                    and ini_value(config, 'upscaler') != 'taa'):
+                size = run_script('patches.py', '--print-preset-size', '--settings', config, capture=True).strip()
+                if size:
+                    env.update(BB_RENDER_RES=size, BB_AUTO_RENDER_RES='1')
+                    notes.append(f'scene {size} patched at start (live_resolution=1: live changes)')
+                    # On this path most prepared draws go unused (145494 of 182272), and on four
+                    # cores the workers take time from the game: 53.0 FPS with 4 workers, 55.1
+                    # with 2, 56.8 without (minimum 45.3, 48.4, 53.3; i5-11300H, 4 cores, 8
+                    # threads). On 8 cores the workers win: 197 FPS without them, 234 with 4.
+                    if physical_cores() <= 4 and 'BB_PREP_WORKERS' not in env:
+                        env['BB_PREP_WORKERS'] = '0'
+                        notes.append('no draw-preparation workers')
+            print(f'Low-VRAM profile ({vram} MiB card): {", ".join(notes)}; BB_LOW_VRAM=0 turns it off')
         extra = env.get('BB_PATCHES', '')
         if env.get('BB_ONLINE') == '1' and env.get('BB_NET_BACKEND') == 'thd' and env.get('BB_BRIDGE_LIVE_MAP') == '1':
             extra = ';'.join(filter(None, (extra, LIVE_MAP_PATCH)))
@@ -353,6 +514,8 @@ def main():
         user_dir = Path(env.get('BB_USER_DIR', data / 'user')).resolve()
         user_dir.mkdir(parents=True, exist_ok=True)
         env.setdefault('BB_GPU_USER_DIR', str(user_dir))
+        if env.get('BB_SAVE_BACKUPS') == '1' and not restarted:  # not again for an in-game restart
+            backup_saves(user_dir)
         if env.get('BB_ONLINE') == '1' and env.get('BB_NET_BACKEND') == 'thd':
             hunters_dream(env, user_dir)
         elif env.get('BB_ONLINE') == '1':
@@ -364,8 +527,17 @@ def main():
                    '--patches', str(out / 'patches.bin'), '--app0', str(game),
                    '--user', str(user_dir),
                    '--timeout', env.get('BB_TIMEOUT', '0'), *args]
-        # No stdin: an inherited pipe (shells such as Git Bash) cost the game its console output.
-        return subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console()).returncode
+        game_over = None
+        if env.get('BB_THERMAL_LOG') == '1':
+            import threading
+            game_over = threading.Event()
+            threading.Thread(target=thermal_watch, args=(game_over,), daemon=True).start()
+        try:
+            # No stdin: an inherited pipe (shells such as Git Bash) cost the game its console output.
+            return subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console()).returncode
+        finally:
+            if game_over:
+                game_over.set()
     finally:
         if mod_view:
             # Read-only game files leave read-only links (mods.remove_overlay clears them).

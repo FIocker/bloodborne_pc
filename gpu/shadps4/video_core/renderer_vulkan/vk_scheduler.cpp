@@ -457,15 +457,11 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     // Guest memory copies into staging read by this submission (copy threads).
     WaitHostCopies();
     Check(current_cmdbuf.end());
-    // bbport: one command buffer per submission (upstream's sessions add an upload buffer that
-    // nothing records into since batching was removed upstream)
-    const std::array<vk::CommandBuffer, 1> cmd_buffers{current_cmdbuf};
 
     const vk::Semaphore timeline = work_semaphore.Handle();
     info.AddSignal(timeline, signal_value);
 
-    std::array<vk::PipelineStageFlags, std::tuple_size_v<decltype(info.wait_semas)>>
-        wait_stage_masks;
+    std::array<vk::PipelineStageFlags, std::tuple_size_v<decltype(info.wait_semas)>> wait_stage_masks;
     wait_stage_masks.fill(vk::PipelineStageFlagBits::eAllCommands);
 
 
@@ -483,8 +479,8 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         .waitSemaphoreCount = info.num_wait_semas,
         .pWaitSemaphores = info.wait_semas.data(),
         .pWaitDstStageMask = wait_stage_masks.data(),
-        .commandBufferCount = static_cast<u32>(cmd_buffers.size()),
-        .pCommandBuffers = cmd_buffers.data(),
+        .commandBufferCount = 1U,
+        .pCommandBuffers = &current_cmdbuf,
         .signalSemaphoreCount = info.num_signal_semas,
         .pSignalSemaphores = info.signal_semas.data(),
     };
