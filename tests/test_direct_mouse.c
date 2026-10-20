@@ -557,7 +557,20 @@ static void test_published_flags_and_stats(void) {
     puts("Direct mouse step: published flags and the statistics PASS");
 }
 
+static void test_vertical_multiplier(void) {
+    mouse_camera_step_set_active(1);
+    mouse_camera_step_publish(.25f,0);
+    mouse_camera_set_vertical_scale(2.0f);
+    mouse_camera_step_add_counts(10,10);
+    mouse_camera_step_begin_update();
+    float pitch=0,yaw=0;
+    assert(mouse_camera_step_turn(0,0,&pitch,&yaw,-1,1));
+    assert(fabsf(pitch-2*yaw)<1e-6f);
+    mouse_camera_set_vertical_scale(1.0f);
+}
+
 int main(void) {
+    test_vertical_multiplier();
     test_degrees_per_count();
     test_per_count_frame_independence();
     test_invert();

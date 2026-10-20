@@ -29,6 +29,7 @@ void mouse_camera_motion(float dx, float dy);
 
 /* The pad read, every sample: DS3's sensitivity (0..10), the port's two multipliers,
  * the axes' inversion, and whether the camera's own turns are held for the mouse. */
+void mouse_camera_set_vertical_scale(float scale);
 void mouse_camera_publish(int sensitivity, float sensitivity_multiplier, float scale,
                           int invert_x, int invert_y, int hold_auto_rotation);
 

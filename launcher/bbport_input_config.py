@@ -21,7 +21,7 @@ STICK_OUTPUTS = ['axis_left_x_minus', 'axis_left_x_plus', 'axis_left_y_minus', '
                   'axis_right_x_minus', 'axis_right_x_plus', 'axis_right_y_minus', 'axis_right_y_plus']
 # Held like a button, read as a modifier of the left stick (walk).
 HOLD_OUTPUTS = ['leftjoystick_halfmode']
-KEYBOARD_OUTPUTS = BUTTON_OUTPUTS + STICK_OUTPUTS + HOLD_OUTPUTS
+KEYBOARD_OUTPUTS = list(dict.fromkeys(BUTTON_OUTPUTS + STICK_OUTPUTS + HOLD_OUTPUTS))
 # Bindings the Controls page shows per action. The game keeps up to four per output
 # (INPUT_MAX_BINDINGS_PER_OUTPUT): three keyboard and mouse ones and the controller's.
 SLOTS = 3
@@ -88,6 +88,10 @@ ACTION_GROUPS = [
 
 # Names runtime_input_config.c's kKeyNames accepts (src/runtime_input_config.c); kept in the same
 # order/groups for an easy side-by-side diff when that table changes.
+ACTION_GROUPS.append((('PC actions', 'Действия ПК'), [
+    (name, OUTPUT_LABELS[name] if len(OUTPUT_LABELS[name]) > 1 else (OUTPUT_LABELS[name][0], OUTPUT_LABELS[name][0]))
+    for name in ('strong', 'menu_confirm', 'menu_back')]))
+
 KEY_NAMES = (
     [chr(c) for c in range(ord('a'), ord('z') + 1)] + [str(d) for d in range(10)] +
     [f'f{n}' for n in range(1, 13)] +
@@ -161,6 +165,8 @@ def is_bindable(output, value):
     for a BUTTON_OUTPUTS entry, a mouse button or wheel step), or a combo of up to MAX_COMBO of
     them, each at most once. A controller line ("cross = cross") never is one."""
     parts = binding_parts(value)
+    if output in ('strong','menu_confirm','menu_back') and len(parts)!=1:
+        return False
     if not 1 <= len(parts) <= MAX_COMBO or len(set(parts)) != len(parts):
         return False
     allowed = KEY_NAMES_SET | (MOUSE_BUTTON_NAMES_SET if output not in STICK_OUTPUTS else set())
@@ -455,6 +461,7 @@ MOUSE_EXTRA_KEYS = {
     'mouse_hold_auto_rotation': ('hold_auto_rotation', bool),
     'mouse_look_feel': ('look_feel', ('linear', 'legacy')),
     'mouse_look_gain': ('look_gain', (0.01, 20.0)),
+    'mouse_sensitivity_y': ('sensitivity_y', (0.1, 10.0)),
 }
 
 
@@ -689,6 +696,7 @@ def save_mouse_settings(path, settings, lines):
             out.append(new_line if settings['enabled'] else f'# {new_line}')
             continue
         output = body.split('=', 1)[0].split(':')[0] if '=' in body else ''
+        output = {'mouse_invert_x':'mouse_camera_invert_x', 'mouse_invert_y':'mouse_camera_invert_y'}.get(output,output)
         if output in updates:
             if output not in written:
                 out.append(f'{output} = {updates[output]}')

@@ -617,6 +617,7 @@ static void sample_host(PadData *d) {
     rx=apply_deadzone(rx,cfg->deadzone[DEADZONE_RIGHT_STICK].inner,cfg->deadzone[DEADZONE_RIGHT_STICK].outer);
     ry=apply_deadzone(ry,cfg->deadzone[DEADZONE_RIGHT_STICK].inner,cfg->deadzone[DEADZONE_RIGHT_STICK].outer);
 
+    mouse_camera_set_vertical_scale(cfg->mouse.sensitivity_y);
     mouse_camera_publish(cfg->mouse.direct_sensitivity, cfg->mouse.camera_sensitivity,
                          cfg->mouse.camera_scale, cfg->mouse.invert_x, cfg->mouse.invert_y,
                          cfg->mouse.hold_auto_rotation && !menu_pointer_using_controller());
@@ -631,14 +632,14 @@ static void sample_host(PadData *d) {
             smoothed_mouse_stick_x=smoothed_mouse_stick_y=0;
         } else if (cfg->mouse.look_linear) {
             mx=(int)lroundf(fmaxf(-127,fminf(127,mouse.dx*cfg->mouse.look_gain)));
-            my=(int)lroundf(fmaxf(-127,fminf(127,mouse.dy*cfg->mouse.look_gain)));
+            my=(int)lroundf(fmaxf(-127,fminf(127,mouse.dy*cfg->mouse.sensitivity_y*cfg->mouse.look_gain)));
         } else {
             uint64_t now=now_us();
             double dt_ms=last_mouse_sample_us ? (double)(now-last_mouse_sample_us)/1000.0 : 33.0;
             if (dt_ms<1.0) dt_ms=1.0;
             if (dt_ms>100.0) dt_ms=100.0;
             last_mouse_sample_us=now;
-            mouse_to_axis(mouse.dx,mouse.dy,dt_ms,&cfg->mouse,&mx,&my);
+            mouse_to_axis(mouse.dx,mouse.dy*cfg->mouse.sensitivity_y,dt_ms,&cfg->mouse,&mx,&my);
         }
         if (!direct && cfg->mouse.invert_x) mx=-mx;
         if (!direct && cfg->mouse.invert_y) my=-my;

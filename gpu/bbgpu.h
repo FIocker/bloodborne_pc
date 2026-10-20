@@ -68,11 +68,9 @@ void bbgpu_input_configure(int mouse_mode_available, int32_t toggle_scancode, in
  * thread polls this once per sample() (CFG-008) to know when to re-read input.ini. 0 if no
  * window exists yet. */
 int bbgpu_input_reload_requested(void);
-/* Direct mouse camera (mouse_camera = direct in input.ini): whether it is wanted, its
- * sensitivity multiplier, and the motion's per-axis multipliers (input_mouse_scale_x/_y: -1 to
- * invert, the vertical sensitivity) and whether the drawn position turns too (mouse_camera_sync).
- * Safe from any thread; applied on the window thread's next
- * PollEvents. */
+/* Direct camera capture configuration for the window thread. Axis inversion, vertical
+ * sensitivity and camera-step settings are published separately by runtime_pad to the
+ * bbhost camera hooks. Safe from any thread; applied at the next PollEvents. */
 void bbgpu_mouse_camera_configure(int direct, float sensitivity);
 /* NVIDIA Reflex: called before pad input sampling (driver frame pacing). */
 void bbgpu_reflex_pre_input_sample(void);

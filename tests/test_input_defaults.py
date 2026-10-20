@@ -112,8 +112,8 @@ class InputDefaultsTests(unittest.TestCase):
             text = path.read_text(encoding='utf-8')
         self.assertNotIn('mouse_invert', untouched)  # defaults add no lines
         self.assertTrue(changed is not None)
-        self.assertEqual(text.count('mouse_invert_y'), 1)  # rewritten in place, not added again
-        self.assertIn('mouse_invert_y = off\n', text)
+        self.assertEqual(text.count('mouse_camera_invert_y'), 1)  # rewritten in place, not added again
+        self.assertIn('mouse_camera_invert_y = 0\n', text)
         self.assertIn('mouse_sensitivity_y = 0.6\n', text)
         self.assertNotIn('mouse_invert_x', text)
 
@@ -123,11 +123,11 @@ class InputDefaultsTests(unittest.TestCase):
             path.write_text('\n'.join(config.apply_layout(config.DEFAULT_INPUT_INI.splitlines())) + '\n',
                             encoding='utf-8')
             _b, lines, _t, _r, mouse = config.load_input_ini(path)
-            self.assertEqual(mouse['camera'], 'direct')  # the DS3 layout's
+            self.assertEqual(mouse['camera_mode'], 'direct')  # the DS3 layout's
             mouse['camera_sensitivity'] = 1.75
             config.save_mouse_settings(path, mouse, lines)
             again = config.load_input_ini(path)[4]
-            again['camera'] = 'stick'
+            again['camera_mode'] = 'stick'
             config.save_mouse_settings(path, again, config.load_input_ini(path)[1])
             text = path.read_text(encoding='utf-8')
         self.assertEqual(again['camera_sensitivity'], 1.75)

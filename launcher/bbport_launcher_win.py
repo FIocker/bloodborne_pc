@@ -2011,7 +2011,7 @@ class Launcher:
                 r = table.grid_size()[1]
                 ttk.Label(table, text=_(label, label_ru)).grid(row=r, column=0, sticky='w', padx=(0, 18), pady=2)
                 buttons = []
-                for slot in range(SLOTS):
+                for slot in range(1 if output in ('strong', 'menu_confirm', 'menu_back') else SLOTS):
                     btn = ttk.Button(table, style='Slot.TButton',
                                      command=lambda o=output, i=slot: self.start_remap_capture(o, i))
                     btn.grid(row=r, column=slot + 1, sticky='ew', padx=2, pady=2)
@@ -2067,7 +2067,8 @@ class Launcher:
                        variable=stick_var, value='left').pack(side='left', padx=(16, 0))
         self.row(f, _('Mouse controls', 'Мышь управляет'), stick_box)
 
-        self.pc_mouse_vars = {'enabled': enabled_var, 'stick': stick_var}
+        self.pc_mouse_vars = self.mouse_vars
+        self.pc_mouse_vars.update(enabled=enabled_var, stick=stick_var)
         mode_var = tk.StringVar(value=ms['camera_mode'])
         self.pc_mouse_vars['camera_mode'] = mode_var
         mode_var.trace_add('write', lambda *_a: (ms.__setitem__('camera_mode', mode_var.get()), mark_mouse_edited()))
@@ -2135,14 +2136,6 @@ class Launcher:
                    _('Up and down as a multiple of left and right (1.00 = the same).',
                      'Вверх и вниз относительно влево и вправо (1.00 = одинаково).'), 0.1, 3.0)
 
-        def invert_check(key, text):
-            var = self.mouse_vars[key] = tk.BooleanVar(value=ms[key])
-            var.trace_add('write', lambda *_a: (ms.__setitem__(key, var.get()), mark_mouse_edited()))
-            ttk.Checkbutton(f, text=text, variable=var).grid(
-                row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(4, 0))
-
-        invert_check('invert_x', _('Invert horizontal', 'Инвертировать по горизонтали'))
-        invert_check('invert_y', _('Invert vertical', 'Инвертировать по вертикали'))
         self.note(f, _('Vertical sensitivity and inverting apply to both camera modes.',
                        'Вертикальная чувствительность и инверсия действуют в обоих режимах камеры.'), top=2)
 
@@ -2186,7 +2179,7 @@ class Launcher:
         """Stage an explicit PC-layout replacement; saving remains the normal collect() path."""
         self.remap_lines = bbhost_preset_lines(self.remap_lines)
         self.remap_bindings, *_ = parse_input_lines(self.remap_lines)
-        self.remap_edits = {output: values[0] if values else None
+        self.remap_edits = {output: list(values[:SLOTS])
                             for output, values in self.remap_bindings.items()}
         for output in self.remap_rows:
             self.refresh_remap_row(output)
@@ -2268,6 +2261,9 @@ class Launcher:
 
         def apply(name):
             parts = (modifiers + [name])[-MAX_COMBO:] if name not in modifiers else list(modifiers)
+            if output in ('strong', 'menu_confirm', 'menu_back') and len(parts) != 1:
+                self.messagebox.showwarning(_('Single input'), _('This PC action accepts one key or mouse button.'))
+                return
             reserved = [p for p in parts if p in reserved_keys(self.remap_toggle_key, self.remap_reload_key)]
             if reserved:
                 self.messagebox.showwarning(

@@ -54,6 +54,13 @@ float mouse_camera_degrees_per_count_scaled(int sensitivity, float scale) {
     return mouse_camera_degrees_per_count(sensitivity) * scale;
 }
 
+static _Atomic uint32_t g_vertical_scale = 0x3f800000u;
+void mouse_camera_set_vertical_scale(float scale) {
+    if (!isfinite(scale) || scale < 0.1f || scale > 10.0f) scale=1.0f;
+    uint32_t bits; memcpy(&bits,&scale,4);
+    atomic_store_explicit(&g_vertical_scale,bits,memory_order_relaxed);
+}
+
 static uint64_t pack2(float x, float y) {
     uint32_t a, b;
     memcpy(&a, &x, 4);
@@ -168,7 +175,9 @@ int mouse_camera_step_turn(float stick_pitch, float stick_yaw, float *pitch, flo
     const uint32_t flags = atomic_load_explicit(&g_flags, memory_order_relaxed);
     const float per_count = mouse_camera_step_degrees_per_count();
     /* DS3's signs: a count is negated unless the axis is inverted, and the camera subtracts. */
-    const float mouse_pitch = ((flags & MOUSE_CAMERA_INVERT_Y) ? 1.0f : -1.0f) * dy * per_count;
+    uint32_t vertical_bits=atomic_load_explicit(&g_vertical_scale,memory_order_relaxed);
+    float vertical_scale; memcpy(&vertical_scale,&vertical_bits,4);
+    const float mouse_pitch = ((flags & MOUSE_CAMERA_INVERT_Y) ? 1.0f : -1.0f) * dy * per_count * vertical_scale;
     const float mouse_yaw = ((flags & MOUSE_CAMERA_INVERT_X) ? 1.0f : -1.0f) * dx * per_count;
     float p = *pitch - mouse_pitch * radians_per_degree;
     float y = *yaw - mouse_yaw * radians_per_degree;

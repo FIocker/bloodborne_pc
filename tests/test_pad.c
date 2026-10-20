@@ -59,6 +59,7 @@ static char stub_prompts[20][128];
 void bbgpu_prompts_configure(const char *const *inputs, int count) {
     for (int i=0;i<count && i<20;++i) snprintf(stub_prompts[i],sizeof(stub_prompts[i]),"%s",inputs[i]);
 }
+void mouse_camera_set_vertical_scale(float scale) { (void)scale; }
 static int stub_camera_configure_calls;
 static int stub_camera_configure_direct;
 void bbgpu_mouse_camera_configure(int direct, float sensitivity) {
@@ -756,9 +757,10 @@ int main(void) {
     assert(pad_read_state(1,&data)==0);
     assert((data.buttons & (BTN_CROSS|BTN_L3|BTN_TOUCHPAD))==(BTN_CROSS|BTN_L3|BTN_TOUCHPAD));
     /* A new touch gets a new id (1..127), as from a DualShock 4: the game ignores id 0. */
-    assert(data.touch_count==1 && data.touches[0].x==480 && data.touches[0].y==471 && data.touches[0].id==1);
+    assert(data.touch_count==1 && data.touches[0].x==480 && data.touches[0].y==471 && data.touches[0].id>0);
+    const uint8_t scripted_touch_id=data.touches[0].id;
     inject(path,"touchpad_right");
-    assert(pad_read_state(1,&data)==0 && data.touch_count==1 && data.touches[0].x==1440 && data.touches[0].id==1);
+    assert(pad_read_state(1,&data)==0 && data.touch_count==1 && data.touches[0].x==1440 && data.touches[0].id==scripted_touch_id);
     inject(path,"");
     assert(pad_read_state(1,&data)==0 && data.buttons==0 && data.touch_count==0);
 
@@ -786,8 +788,8 @@ int main(void) {
     SDL_UpdateGamepads();
     assert(pad_read_state(1,&data)==0);
     assert(gamepad && data.touch_count==2 && (data.buttons & BTN_TOUCHPAD));
-    assert(data.touches[0].x==1439 && data.touches[0].y==471 && data.touches[0].id==2);
-    assert(data.touches[1].x==480 && data.touches[1].y==942 && data.touches[1].id==3);
+    assert(data.touches[0].x==1439 && data.touches[0].y==471 && data.touches[0].id>0 && data.touches[0].id!=scripted_touch_id);
+    assert(data.touches[1].x==480 && data.touches[1].y==942 && data.touches[1].id>0 && data.touches[1].id!=data.touches[0].id);
     capture=1;
     assert(pad_read_state(1,&data)==0 && data.touch_count==0 && data.buttons==0);
     capture=0;

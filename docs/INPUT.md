@@ -85,9 +85,11 @@ layout does with Shift), or use another modifier. The launcher's Controls page m
 overlaps with ⚠, and records a combination when you hold Shift, Ctrl or Alt while pressing the
 key or mouse button.
 
-The Controls page shows three slots per action (the controller's line is the fourth binding):
+The Controls page shows three slots per regular action (the controller's line is the fourth binding):
 click a slot and press a key, click a mouse button or turn the wheel; right-click a slot to
-clear it. Walk (`leftjoystick_halfmode`, the left stick at half) has a row too.
+clear it. Walk (`leftjoystick_halfmode`, the left stick at half) has a row too. The three PC
+actions (`strong`, `menu_confirm`, `menu_back`) each accept one key or mouse button, without
+combinations.
 
 ## Dark Souls III layout
 
@@ -193,10 +195,14 @@ stick` (or `legacy`) restores the stick emulation above; `off` leaves the camera
 
 - **Lock-on:** while a target is locked, motion goes to the stick instead (the game drives the
   camera then), so a fast flick switches targets instead of turning the camera.
-- **F7** turns mouse look off, so the right stick/arrow keys drive the camera again. While the
-  direct camera is on, the stick does not turn the camera.
+- **F7** turns mouse look off, so the right stick/arrow keys drive the camera again. When a
+  stick turns the camera, its movement takes priority over the mouse for that camera update.
 - **Fallback:** on any other game version, or if another patch has changed the code the port
   hooks, it logs one line and the stick emulation above is used instead.
+
+`mouse_camera_sync` from upstream configurations is accepted for compatibility. This camera
+already applies counts during the game's camera update and does not use the separate upstream
+draw-position synchronization hook.
 
 The camera is not the only thing the mouse drives: the game's own menus take the pointer (click
 to select, right click to go back, the wheel to scroll) while a menu is open, with `menu_confirm`
